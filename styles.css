@@ -1,0 +1,1064 @@
+/* ==========================================================================
+   VIRTUAL UAV & AERO-PISTON ENGINE SIMULATOR - DESIGN SYSTEM
+   Futuristic Aerospace Mission Control / Defence Avionics Aesthetic
+   ========================================================================== */
+
+:root {
+  /* Color Palette */
+  --bg-primary: #060b13;
+  --bg-surface: #0a1320;
+  --bg-card: rgba(13, 24, 38, 0.85);
+  --bg-card-hover: rgba(18, 33, 52, 0.95);
+  --bg-input: #08111b;
+  
+  /* Tactical Accent Colors */
+  --cyan-primary: #00f0ff;
+  --cyan-glow: rgba(0, 240, 255, 0.25);
+  --cyan-dim: #008899;
+  
+  --emerald-nominal: #00ff9d;
+  --emerald-glow: rgba(0, 255, 157, 0.25);
+  
+  --amber-warning: #ffb700;
+  --amber-glow: rgba(255, 183, 0, 0.25);
+  
+  --crimson-critical: #ff3366;
+  --crimson-glow: rgba(255, 51, 102, 0.3);
+  
+  --text-primary: #e2f1ff;
+  --text-secondary: #8ba3be;
+  --text-dim: #4d6682;
+  
+  --border-subtle: rgba(0, 240, 255, 0.15);
+  --border-bright: rgba(0, 240, 255, 0.4);
+  
+  /* Fonts */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  
+  /* Shadows & Glass */
+  --glass-blur: blur(12px);
+  --box-shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --box-shadow-glow: 0 0 16px var(--cyan-glow);
+}
+
+/* Base Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  overflow-x: hidden;
+  background-image: 
+    radial-gradient(circle at 15% 20%, rgba(0, 240, 255, 0.04) 0%, transparent 40%),
+    radial-gradient(circle at 85% 80%, rgba(0, 255, 157, 0.03) 0%, transparent 40%),
+    linear-gradient(rgba(6, 11, 19, 0.94), rgba(6, 11, 19, 0.94)),
+    repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 240, 255, 0.015) 2px, rgba(0, 240, 255, 0.015) 4px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 4px;
+  min-height: 100vh;
+}
+
+/* Aerospace Grid Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 12px 16px;
+  gap: 12px;
+}
+
+/* ==========================================================================
+   TOP HEADER & TACTICAL STATUS BAR
+   ========================================================================== */
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-card);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 18px;
+  box-shadow: var(--box-shadow-card);
+}
+
+.brand-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid var(--border-bright);
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.brand-badge .badge-icon {
+  color: var(--cyan-primary);
+  font-size: 16px;
+  animation: pulse-glow 2s infinite ease-in-out;
+}
+
+.brand-titles h1 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #ffffff;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-titles h1 span.highlight {
+  color: var(--cyan-primary);
+}
+
+.brand-titles .subtitle {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.viksit-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: #ff9933;
+  background: rgba(255, 153, 51, 0.1);
+  border: 1px solid rgba(255, 153, 51, 0.35);
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.8px;
+}
+
+.viksit-tag .flag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #138808;
+  box-shadow: 0 0 4px #ff9933;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan-primary);
+  letter-spacing: 0.5px;
+}
+
+.status-pill.streaming-active {
+  background: rgba(0, 255, 157, 0.1);
+  border-color: var(--emerald-nominal);
+  color: var(--emerald-nominal);
+}
+
+.status-pill.local-mode {
+  background: rgba(255, 183, 0, 0.1);
+  border-color: var(--amber-warning);
+  color: var(--amber-warning);
+}
+
+.status-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: blink 1.2s infinite ease-in-out;
+}
+
+/* Tactical Buttons */
+.btn-tactical {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 7px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(13, 24, 38, 0.9);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.btn-tactical:hover {
+  background: rgba(0, 240, 255, 0.15);
+  border-color: var(--cyan-primary);
+  color: #ffffff;
+  box-shadow: 0 0 10px var(--cyan-glow);
+}
+
+.btn-tactical.btn-primary {
+  background: rgba(0, 240, 255, 0.18);
+  border-color: var(--cyan-primary);
+  color: var(--cyan-primary);
+}
+
+.btn-tactical.btn-primary:hover {
+  background: var(--cyan-primary);
+  color: #000000;
+}
+
+.btn-tactical.btn-demo {
+  background: rgba(0, 255, 157, 0.15);
+  border-color: var(--emerald-nominal);
+  color: var(--emerald-nominal);
+}
+
+.btn-tactical.btn-demo:hover {
+  background: var(--emerald-nominal);
+  color: #000000;
+  box-shadow: 0 0 12px var(--emerald-glow);
+}
+
+.btn-tactical.btn-danger {
+  background: rgba(255, 51, 102, 0.15);
+  border-color: var(--crimson-critical);
+  color: var(--crimson-critical);
+}
+
+.btn-tactical.btn-danger:hover {
+  background: var(--crimson-critical);
+  color: #ffffff;
+}
+
+/* Demo Active Banner */
+.demo-banner {
+  background: linear-gradient(90deg, rgba(0, 255, 157, 0.15), rgba(0, 240, 255, 0.15));
+  border: 1px solid var(--emerald-nominal);
+  border-radius: 6px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  animation: pulse-glow 3s infinite ease-in-out;
+}
+
+.demo-banner .demo-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.demo-banner .demo-title {
+  color: var(--emerald-nominal);
+  font-weight: 700;
+}
+
+.demo-banner .demo-desc {
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   MAIN DASHBOARD GRID LAYOUT
+   ========================================================================== */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 12px;
+  flex: 1;
+}
+
+/* Card Containers */
+.panel-card {
+  background: var(--bg-card);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px;
+  box-shadow: var(--box-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.panel-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan-primary), transparent);
+  opacity: 0.3;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.1);
+  padding-bottom: 8px;
+}
+
+.panel-header h2 {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--cyan-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-header .header-tag {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: rgba(0, 240, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 240, 255, 0.15);
+}
+
+/* ==========================================================================
+   3D UAV VIEWPORT & AVIONICS HUD
+   ========================================================================== */
+.uav-viewport-container {
+  position: relative;
+  width: 100%;
+  height: 290px;
+  background: #04080e;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  overflow: hidden;
+}
+
+#uavCanvasContainer {
+  width: 100%;
+  height: 100%;
+}
+
+/* Avionics HUD Overlay */
+.hud-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+}
+
+.hud-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.hud-telemetry-badge {
+  background: rgba(6, 11, 19, 0.8);
+  border: 1px solid var(--border-bright);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--cyan-primary);
+}
+
+.hud-view-controls {
+  pointer-events: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.hud-btn {
+  background: rgba(6, 11, 19, 0.85);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 9px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.hud-btn:hover, .hud-btn.active {
+  color: var(--cyan-primary);
+  border-color: var(--cyan-primary);
+  background: rgba(0, 240, 255, 0.15);
+}
+
+.hud-center-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  height: 120px;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.hud-bottom-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.hud-readout-group {
+  background: rgba(6, 11, 19, 0.85);
+  border: 1px solid var(--border-subtle);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+}
+
+.hud-readout {
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-readout .label {
+  color: var(--text-dim);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.hud-readout .val {
+  color: var(--cyan-primary);
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   FLIGHT CONTROLS PANEL
+   ========================================================================== */
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.control-item {
+  background: var(--bg-input);
+  border: 1px solid rgba(0, 240, 255, 0.1);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.control-header label {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.control-header .control-val {
+  color: var(--cyan-primary);
+  font-weight: 700;
+}
+
+.slider-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: #112030;
+  border-radius: 3px;
+  outline: none;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--cyan-primary);
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--cyan-glow);
+  transition: transform 0.1s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* Flight Phase Buttons */
+.phase-selector {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.phase-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 6px 2px;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+
+.phase-btn:hover {
+  border-color: var(--cyan-primary);
+  color: #ffffff;
+}
+
+.phase-btn.active {
+  background: rgba(0, 240, 255, 0.2);
+  border-color: var(--cyan-primary);
+  color: var(--cyan-primary);
+  box-shadow: 0 0 8px var(--cyan-glow);
+}
+
+/* ==========================================================================
+   FAULT INJECTION MATRIX
+   ========================================================================== */
+.fault-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.fault-btn {
+  background: var(--bg-input);
+  border: 1px solid rgba(255, 51, 102, 0.2);
+  color: var(--text-secondary);
+  padding: 8px 4px;
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+  line-height: 1.2;
+}
+
+.fault-btn.btn-normal {
+  border-color: rgba(0, 255, 157, 0.3);
+  color: var(--emerald-nominal);
+}
+
+.fault-btn:hover {
+  border-color: var(--crimson-critical);
+  color: #ffffff;
+}
+
+.fault-btn.active {
+  background: rgba(255, 51, 102, 0.25);
+  border-color: var(--crimson-critical);
+  color: #ffffff;
+  box-shadow: 0 0 10px var(--crimson-glow);
+  animation: fault-pulse 1.5s infinite;
+}
+
+.fault-btn.btn-normal.active {
+  background: rgba(0, 255, 157, 0.2);
+  border-color: var(--emerald-nominal);
+  color: var(--emerald-nominal);
+  box-shadow: 0 0 10px var(--emerald-glow);
+  animation: none;
+}
+
+.fault-status-box {
+  background: rgba(8, 17, 27, 0.9);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fault-status-box .fault-tag {
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(0, 255, 157, 0.15);
+  color: var(--emerald-nominal);
+}
+
+.fault-status-box.anomaly .fault-tag {
+  background: rgba(255, 51, 102, 0.2);
+  color: var(--crimson-critical);
+}
+
+.fault-status-box .fault-details {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+
+/* ==========================================================================
+   VIRTUAL SENSOR PANEL (9 LIVE SENSORS)
+   ========================================================================== */
+.sensors-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.sensor-card {
+  background: var(--bg-input);
+  border: 1px solid rgba(0, 240, 255, 0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+.sensor-card.warning {
+  border-color: var(--amber-warning);
+  background: rgba(255, 183, 0, 0.04);
+}
+
+.sensor-card.critical {
+  border-color: var(--crimson-critical);
+  background: rgba(255, 51, 102, 0.06);
+  animation: sensor-alert 1.5s infinite ease-in-out;
+}
+
+.sensor-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sensor-name {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.sensor-status-badge {
+  font-size: 8px;
+  font-family: var(--font-mono);
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  font-weight: 700;
+  background: rgba(0, 255, 157, 0.15);
+  color: var(--emerald-nominal);
+}
+
+.sensor-card.warning .sensor-status-badge {
+  background: rgba(255, 183, 0, 0.2);
+  color: var(--amber-warning);
+}
+
+.sensor-card.critical .sensor-status-badge {
+  background: rgba(255, 51, 102, 0.25);
+  color: var(--crimson-critical);
+}
+
+.sensor-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.sensor-val {
+  font-size: 17px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.sensor-card.warning .sensor-val {
+  color: var(--amber-warning);
+}
+
+.sensor-card.critical .sensor-val {
+  color: var(--crimson-critical);
+}
+
+.sensor-unit-trend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.sensor-trend {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.trend-up { color: var(--amber-warning); }
+.trend-down { color: var(--cyan-primary); }
+.trend-flat { color: var(--text-dim); }
+
+/* Sensor Bar Gauge */
+.sensor-bar-track {
+  width: 100%;
+  height: 4px;
+  background: #112030;
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sensor-bar-fill {
+  height: 100%;
+  background: var(--cyan-primary);
+  border-radius: 2px;
+  transition: width 0.2s ease, background-color 0.2s ease;
+}
+
+.sensor-card.warning .sensor-bar-fill {
+  background: var(--amber-warning);
+}
+
+.sensor-card.critical .sensor-bar-fill {
+  background: var(--crimson-critical);
+}
+
+/* ==========================================================================
+   LIVE OSCILLOSCOPE GRAPHS
+   ========================================================================== */
+.graphs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.graph-box {
+  background: var(--bg-input);
+  border: 1px solid rgba(0, 240, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.graph-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.graph-canvas-wrap {
+  width: 100%;
+  height: 68px;
+  position: relative;
+}
+
+.graph-canvas-wrap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 3px;
+}
+
+/* ==========================================================================
+   TELEMETRY API STREAMING CONTROLLER & INSPECTOR
+   ========================================================================== */
+.bottom-section {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 12px;
+}
+
+.telemetry-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.endpoint-input-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.endpoint-input-wrap .prefix {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--cyan-dim);
+}
+
+.endpoint-input-wrap input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.telemetry-metrics-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.metric-card {
+  background: var(--bg-input);
+  border: 1px solid rgba(0, 240, 255, 0.1);
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-card .label {
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.metric-card .val {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--cyan-primary);
+}
+
+.packet-json-viewer {
+  background: #04080e;
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #8be9fd;
+  max-height: 110px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ==========================================================================
+   SYSTEM PIPELINE ARCHITECTURE PANEL
+   ========================================================================== */
+.pipeline-flow-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 0;
+  overflow-x: auto;
+}
+
+.pipeline-node {
+  background: var(--bg-input);
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 100px;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.pipeline-node.node-highlight {
+  border-color: var(--cyan-primary);
+  box-shadow: 0 0 10px var(--cyan-glow);
+}
+
+.pipeline-node.node-external {
+  border-color: var(--emerald-nominal);
+  border-style: dashed;
+}
+
+.pipeline-node .node-icon {
+  font-size: 16px;
+  color: var(--cyan-primary);
+}
+
+.pipeline-node.node-external .node-icon {
+  color: var(--emerald-nominal);
+}
+
+.pipeline-node .node-title {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.pipeline-node .node-desc {
+  font-size: 8px;
+  color: var(--text-dim);
+}
+
+.pipeline-arrow {
+  color: var(--cyan-primary);
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.7;
+  animation: arrow-flow 1.5s infinite linear;
+}
+
+/* ==========================================================================
+   FOOTER
+   ========================================================================== */
+.footer-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-card);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.footer-bar .left-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-bar .left-note span.badge {
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid var(--cyan-dim);
+  color: var(--cyan-primary);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+/* ==========================================================================
+   KEYFRAME ANIMATIONS
+   ========================================================================== */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; filter: drop-shadow(0 0 8px var(--cyan-primary)); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes fault-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 8px var(--crimson-glow); }
+  50% { transform: scale(1.02); box-shadow: 0 0 16px var(--crimson-glow); }
+}
+
+@keyframes sensor-alert {
+  0%, 100% { box-shadow: 0 0 0 rgba(255, 51, 102, 0); }
+  50% { box-shadow: 0 0 10px var(--crimson-glow); }
+}
+
+@keyframes arrow-flow {
+  0% { transform: translateX(-2px); opacity: 0.4; }
+  50% { transform: translateX(2px); opacity: 1; }
+  100% { transform: translateX(-2px); opacity: 0.4; }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #08111b;
+}
+::-webkit-scrollbar-thumb {
+  background: #18334d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cyan-dim);
+}
+
+/* ==========================================================================
+   RESPONSIVE DESIGN BREAKPOINTS
+   ========================================================================== */
+@media (max-width: 1200px) {
+  .main-grid, .bottom-section {
+    grid-template-columns: 1fr;
+  }
+}
