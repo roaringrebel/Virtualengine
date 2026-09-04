@@ -150,7 +150,7 @@ export const App: React.FC = () => {
     addEventLog('ENGINE STOP: Ignition CUTOFF, engine spooled down to Standby (0 RPM)', 'ENGINE');
   };
 
-  const handleChangeControl = <K extends keyof SimulationState['controls']>(key: K, value: number) => {
+  const handleChangeControl = <K extends keyof SimulationState['controls']>(key: K, value: SimulationState['controls'][K]) => {
     simRef.current.setControl(key, value);
   };
 

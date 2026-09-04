@@ -2,6 +2,8 @@ export type FlightPhase = 'STANDBY' | 'STARTUP' | 'TAKEOFF' | 'CLIMB' | 'CRUISE'
 
 export type EngineStatus = 'OFF' | 'STARTING' | 'NOMINAL' | 'WARNING' | 'CRITICAL';
 
+export type NavigationMode = 'MANUAL_PILOT' | 'WAYPOINT_ROUTE';
+
 export type FaultType = 
   | 'NORMAL'
   | 'LOW_OIL_PRESSURE'
@@ -19,8 +21,11 @@ export interface FlightControlsState {
   altitude: number;         // ft (0 - 25,000)
   airspeed: number;         // km/h (0 - 250)
   heading: number;          // deg (0 - 360)
+  latitude: number;         // °N (32.5000 - 32.5900)
+  longitude: number;        // °E (77.1600 - 77.2700)
   ambientTemp: number;      // °C (-30 - +50)
   engineLoad: number;       // % (0 - 100)
+  navigationMode: NavigationMode;
 }
 
 export interface AtmosphericState {

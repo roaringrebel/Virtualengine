@@ -11,11 +11,12 @@ import {
   Video, 
   RotateCcw, 
   Radio, 
-  Wind,
+  Navigation,
   Compass
 } from 'lucide-react';
 import { FlightPhase } from '../types/simulation';
 import { UAVPosition } from '../types/mission';
+import { MISSION_WAYPOINTS } from '../simulation/simulationEngine';
 
 interface MissionMapProps {
   uavPosition: UAVPosition;
@@ -40,7 +41,9 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   const propBlurDiscRef = useRef<THREE.Mesh | null>(null);
   const groundMeshRef = useRef<THREE.Mesh | null>(null);
   const shadowMeshRef = useRef<THREE.Mesh | null>(null);
-  const flightPathLineRef = useRef<THREE.Line | null>(null);
+  const historyPathLineRef = useRef<THREE.Line | null>(null);
+  const forwardVectorLineRef = useRef<THREE.Line | null>(null);
+  const waypointCorridorLineRef = useRef<THREE.Line | null>(null);
   const satelliteTextureRef = useRef<THREE.Texture | null>(null);
 
   // Interactive camera orbit state
@@ -49,10 +52,21 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   const orbitAngleRef = useRef({ theta: 0.05, phi: 0.35, distance: 58 });
   const zoomFactorRef = useRef(1.0);
 
-  // Continuous Flight Position & Spline Tracking
-  const flightTimeRef = useRef<number>(0);
-  const currentBankAngleRef = useRef<number>(0);
-  const currentPitchAngleRef = useRef<number>(0);
+  // Flight history breadcrumbs buffer
+  const historyPointsRef = useRef<THREE.Vector3[]>([]);
+  const lastHeadingRef = useRef<number>(uavPosition.heading);
+  const currentBankRef = useRef<number>(0);
+  const currentPitchRef = useRef<number>(0);
+
+  // Coordinate mapper: Converts GPS (Lat, Lon, Alt) to 3D Space Coordinates (X, Y, Z)
+  const gpsTo3D = (lat: number, lon: number, altFt: number): THREE.Vector3 => {
+    const centerLat = 32.5450;
+    const centerLon = 77.2150;
+    const x = (lon - centerLon) * 11500;
+    const z = -(lat - centerLat) * 11500;
+    const y = Math.max(3.0, (altFt / 8000) * 48 + 6.0);
+    return new THREE.Vector3(x, y, z);
+  };
 
   // Synchronize zoom factor ref
   useEffect(() => {
@@ -132,7 +146,6 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
 
     // =========================================================================
     // 5. HIGH-RESOLUTION AERIAL SATELLITE TERRAIN GROUND PLANE
-    // (Uses the uploaded aerial city/river orthophoto as ground background)
     // =========================================================================
     const textureLoader = new THREE.TextureLoader();
     
@@ -154,7 +167,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
     );
     satelliteTextureRef.current = satTexture;
 
-    // Create 3D Ground Terrain with slight elevation contours for rivers/hills
+    // Create 3D Ground Terrain with elevation contours
     const groundGeo = new THREE.PlaneGeometry(1200, 1200, 128, 128);
     groundGeo.rotateX(-Math.PI / 2);
 
@@ -163,7 +176,6 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
     for (let i = 0; i < posAttr.count; i++) {
       v3.fromBufferAttribute(posAttr, i);
       const distFromCenter = Math.sqrt(v3.x * v3.x + v3.z * v3.z);
-      // Gentle natural undulating hills + center river valley
       const riverDepression = Math.sin(v3.x * 0.008 + 0.5) * Math.cos(v3.z * 0.006) * 8;
       const hills = Math.sin(v3.x * 0.015) * Math.cos(v3.z * 0.012) * 12;
       const falloff = Math.max(0, 1 - (distFromCenter / 700));
@@ -197,37 +209,49 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
     shadowMeshRef.current = shadowMesh;
 
     // =========================================================================
-    // 6. 3D FLIGHT PATH TRAJECTORY SPLINE (Continuous loop over satellite city)
+    // 6. TACTICAL WAYPOINT MISSION CORRIDOR (Actual Waypoints)
     // =========================================================================
-    const flightPoints = [
-      new THREE.Vector3(-280, 52, 220),  // Waypoint 1: City South
-      new THREE.Vector3(-140, 68, 60),   // Waypoint 2: River Crossing
-      new THREE.Vector3(40, 82, -80),    // Waypoint 3: Urban Center High Climb
-      new THREE.Vector3(260, 74, -200),  // Waypoint 4: North East Hills
-      new THREE.Vector3(310, 65, 80),    // Waypoint 5: East Highway Loop
-      new THREE.Vector3(120, 56, 260),   // Waypoint 6: Inbound Corridor
-      new THREE.Vector3(-280, 52, 220)   // Return to Waypoint 1
-    ];
-    const pathCurve = new THREE.CatmullRomCurve3(flightPoints, true);
-    const curvePoints = pathCurve.getPoints(240);
-    const flightPathGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    const flightPathMat = new THREE.LineDashedMaterial({
-      color: 0xf97316,
+    const wp3DPoints = MISSION_WAYPOINTS.map(wp => gpsTo3D(wp.lat, wp.lon, wp.altitudeFt));
+    const wpGeo = new THREE.BufferGeometry().setFromPoints(wp3DPoints);
+    const wpMat = new THREE.LineDashedMaterial({
+      color: 0x38bdf8,
       dashSize: 8,
       gapSize: 4,
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.6
+    });
+    const wpLine = new THREE.Line(wpGeo, wpMat);
+    wpLine.computeLineDistances();
+    scene.add(wpLine);
+    waypointCorridorLineRef.current = wpLine;
+
+    // Actual Traveled Flight History Line (Dynamic Ribbon)
+    const historyGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)]);
+    const historyMat = new THREE.LineBasicMaterial({
+      color: 0xf97316,
       linewidth: 3,
       transparent: true,
-      opacity: 0.85
+      opacity: 0.9
     });
-    const flightPathLine = new THREE.Line(flightPathGeo, flightPathMat);
-    flightPathLine.computeLineDistances();
-    scene.add(flightPathLine);
-    flightPathLineRef.current = flightPathLine;
+    const historyLine = new THREE.Line(historyGeo, historyMat);
+    scene.add(historyLine);
+    historyPathLineRef.current = historyLine;
+
+    // Projected Forward Heading Vector Line
+    const forwardGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -40)]);
+    const forwardMat = new THREE.LineDashedMaterial({
+      color: 0x22c55e,
+      dashSize: 4,
+      gapSize: 2,
+      linewidth: 2
+    });
+    const forwardLine = new THREE.Line(forwardGeo, forwardMat);
+    scene.add(forwardLine);
+    forwardVectorLineRef.current = forwardLine;
 
     // =========================================================================
     // 7. REALISTIC ROTAX 912 MALE UAV DRONE 3D MODEL
-    // (Medium Altitude Long Endurance UAV: Slender Wings, Rear Pusher Propeller,
-    //  SATCOM Nose Dome, Ventral FLIR Gimbal, Twin Booms & Inverted V-Tail)
     // =========================================================================
     const uavGroup = new THREE.Group();
 
@@ -549,46 +573,21 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   }, [mapStyle]);
 
   // =========================================================================
-  // CONTINUOUS 60FPS FLIGHT MOTION & CAMERA TRACKING LOOP
-  // (Provides realistic continuous 3D flight across the satellite landscape)
+  // CONTINUOUS 60FPS FLIGHT MOTION, REAL GPS MAPPING & DYNAMIC STEERING
   // =========================================================================
   useEffect(() => {
     let animId: number;
     let propSpin = 0;
     let lastTime = performance.now();
 
-    // 3D Spline Flight Trajectory Points over the Satellite Map
-    const flightPoints = [
-      new THREE.Vector3(-280, 52, 220),  // Waypoint 1
-      new THREE.Vector3(-140, 68, 60),   // Waypoint 2
-      new THREE.Vector3(40, 82, -80),    // Waypoint 3
-      new THREE.Vector3(260, 74, -200),  // Waypoint 4
-      new THREE.Vector3(310, 65, 80),    // Waypoint 5
-      new THREE.Vector3(120, 56, 260),   // Waypoint 6
-      new THREE.Vector3(-280, 52, 220)   // Loop
-    ];
-    const pathCurve = new THREE.CatmullRomCurve3(flightPoints, true);
-
     const animate = (now: number) => {
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
 
-      if (engineOn) {
-        // Continuous smooth flight advancement along the curve
-        const speedScale = Math.max(0.4, (uavPosition.airspeed || 145) / 145);
-        flightTimeRef.current = (flightTimeRef.current + dt * 0.045 * speedScale) % 1.0;
-      }
+      // 1. Calculate Exact 3D Position from True GPS Coordinates
+      const current3DPos = gpsTo3D(uavPosition.lat, uavPosition.lon, engineOn ? uavPosition.altitude : 0);
 
-      const t = flightTimeRef.current;
-      const pointOnCurve = pathCurve.getPointAt(t);
-      const tangentOnCurve = pathCurve.getTangentAt(t).normalize();
-
-      // Lookahead point for banking & heading calculations
-      const nextT = (t + 0.015) % 1.0;
-      const nextPoint = pathCurve.getPointAt(nextT);
-      const lookDir = nextPoint.clone().sub(pointOnCurve).normalize();
-
-      // 1. Propeller Spin & Motion Blur Effect
+      // 2. Propeller Spin & Motion Blur
       if (propellerRef.current) {
         if (engineOn) {
           propSpin += 0.85;
@@ -603,60 +602,84 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
         }
       }
 
-      // 2. Position & Orient UAV Drone in 3D Space
+      // 3. Position & Orient UAV Drone in 3D Space
       if (uavGroupRef.current) {
         if (engineOn) {
           // Subtle atmospheric micro-turbulence float
           const turbulenceY = Math.sin(now * 0.004) * 0.35 + Math.cos(now * 0.007) * 0.2;
           const turbulenceRoll = Math.sin(now * 0.003) * 0.02;
 
-          // Interpolate position
-          uavGroupRef.current.position.set(
-            pointOnCurve.x,
-            pointOnCurve.y + turbulenceY,
-            pointOnCurve.z
+          // Smooth position update
+          uavGroupRef.current.position.lerp(
+            new THREE.Vector3(current3DPos.x, current3DPos.y + turbulenceY, current3DPos.z),
+            0.2
           );
 
-          // Calculate Dynamic Heading
-          const headingAngle = Math.atan2(tangentOnCurve.x, tangentOnCurve.z);
+          // Calculate Dynamic Heading Angle (in radians)
+          const targetHeadingRad = -(uavPosition.heading * Math.PI) / 180 + Math.PI;
 
-          // Calculate Dynamic Bank (Roll) based on curvature / yaw rate
-          const crossProduct = tangentOnCurve.x * lookDir.z - tangentOnCurve.z * lookDir.x;
-          const targetBank = THREE.MathUtils.clamp(-crossProduct * 18, -0.45, 0.45);
-          currentBankAngleRef.current = THREE.MathUtils.lerp(currentBankAngleRef.current, targetBank, 0.1);
+          // Calculate Dynamic Banking based on Heading change rate (dHeading/dt)
+          let headingDelta = uavPosition.heading - lastHeadingRef.current;
+          if (headingDelta > 180) headingDelta -= 360;
+          if (headingDelta < -180) headingDelta += 360;
+          lastHeadingRef.current = uavPosition.heading;
 
-          // Calculate Dynamic Pitch based on climb/descent
-          const targetPitch = THREE.MathUtils.clamp(tangentOnCurve.y * 0.8, -0.25, 0.25);
-          currentPitchAngleRef.current = THREE.MathUtils.lerp(currentPitchAngleRef.current, targetPitch, 0.1);
+          const targetBank = THREE.MathUtils.clamp(-headingDelta * 0.35, -0.45, 0.45);
+          currentBankRef.current = THREE.MathUtils.lerp(currentBankRef.current, targetBank, 0.1);
 
-          // Apply rotations
+          // Apply full 3D rotations
           uavGroupRef.current.rotation.set(0, 0, 0);
-          uavGroupRef.current.rotation.y = headingAngle + Math.PI;
-          uavGroupRef.current.rotation.z = currentBankAngleRef.current + turbulenceRoll;
-          uavGroupRef.current.rotation.x = -currentPitchAngleRef.current;
+          uavGroupRef.current.rotation.y = targetHeadingRad;
+          uavGroupRef.current.rotation.z = currentBankRef.current + turbulenceRoll;
 
           // Update Ground Shadow directly beneath UAV
           if (shadowMeshRef.current) {
-            shadowMeshRef.current.position.set(pointOnCurve.x, 1.5, pointOnCurve.z);
-            shadowMeshRef.current.rotation.y = headingAngle + Math.PI;
-            shadowMeshRef.current.scale.setScalar(1 + (pointOnCurve.y / 100));
+            shadowMeshRef.current.position.set(current3DPos.x, 1.2, current3DPos.z);
+            shadowMeshRef.current.rotation.y = targetHeadingRad;
+            shadowMeshRef.current.scale.setScalar(1 + (current3DPos.y / 80));
           }
+
+          // Record Flight History Breadcrumb trail
+          if (historyPointsRef.current.length === 0 || historyPointsRef.current[historyPointsRef.current.length - 1].distanceTo(current3DPos) > 4.0) {
+            historyPointsRef.current.push(current3DPos.clone());
+            if (historyPointsRef.current.length > 250) {
+              historyPointsRef.current.shift();
+            }
+            if (historyPathLineRef.current && historyPointsRef.current.length >= 2) {
+              historyPathLineRef.current.geometry.setFromPoints(historyPointsRef.current);
+              historyPathLineRef.current.computeLineDistances();
+            }
+          }
+
+          // Update Forward Heading Vector Line
+          if (forwardVectorLineRef.current) {
+            const forwardLen = 60;
+            const headingRad = (uavPosition.heading * Math.PI) / 180;
+            const forwardTarget = current3DPos.clone().add(new THREE.Vector3(
+              Math.sin(headingRad) * forwardLen,
+              0,
+              -Math.cos(headingRad) * forwardLen
+            ));
+            forwardVectorLineRef.current.geometry.setFromPoints([current3DPos, forwardTarget]);
+            forwardVectorLineRef.current.computeLineDistances();
+          }
+
         } else {
-          // Stationary in Standby on Base Runway
-          uavGroupRef.current.position.set(-280, 52, 220);
-          uavGroupRef.current.rotation.set(0, 0.4, 0);
+          // Stationary in Standby
+          uavGroupRef.current.position.lerp(current3DPos, 0.2);
+          uavGroupRef.current.rotation.set(0, -(uavPosition.heading * Math.PI) / 180 + Math.PI, 0);
           if (shadowMeshRef.current) {
-            shadowMeshRef.current.position.set(-280, 1.5, 220);
+            shadowMeshRef.current.position.set(current3DPos.x, 1.2, current3DPos.z);
           }
         }
 
-        // 3. Dynamic Camera Tracking Modes
+        // 4. Dynamic Camera Tracking Modes
         if (cameraRef.current) {
           const uavPos = uavGroupRef.current.position;
           const currentZoom = zoomFactorRef.current;
 
           if (viewMode === 'chase') {
-            // Over-the-shoulder chase view locked behind and above the UAV drone
+            // Over-the-shoulder chase view locked behind and above the UAV drone along heading
             const chaseDist = (engineOn ? 62 : 52) * currentZoom;
             const chaseHeight = (engineOn ? 24 : 18) * currentZoom;
             
@@ -669,7 +692,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
             cameraRef.current.position.lerp(camTarget, 0.1);
             cameraRef.current.lookAt(uavPos.x, uavPos.y + 3, uavPos.z);
           } else if (viewMode === 'flir') {
-            // First-person EO/IR Nose Gimbal Camera looking over city & river
+            // First-person EO/IR Nose Gimbal Camera looking forward along heading
             const headingRad = uavGroupRef.current.rotation.y;
             const noseOffset = new THREE.Vector3(0, -1.5, 9.5).applyAxisAngle(new THREE.Vector3(0, 1, 0), headingRad);
             cameraRef.current.position.copy(uavPos).add(noseOffset);
@@ -710,7 +733,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
 
     animId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animId);
-  }, [engineOn, uavPosition.airspeed, viewMode]);
+  }, [engineOn, uavPosition.lat, uavPosition.lon, uavPosition.altitude, uavPosition.heading, viewMode]);
 
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-3 shadow-sm relative overflow-hidden flex flex-col h-full select-none">
@@ -723,7 +746,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           </div>
           <div>
             <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase">MISSION MAP (3D UAV SATELLITE TERRAIN FLIGHT)</h2>
-            <div className="text-[10px] text-[#6B7280]">Rotax 912 MALE UAV Drone | Continuous 3D Aerial Flight Motion</div>
+            <div className="text-[10px] text-[#6B7280]">Rotax 912 MALE UAV Drone | Live GPS Coordinates & Heading Steering</div>
           </div>
         </div>
 
@@ -816,7 +839,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           </div>
           <div className="flex justify-between gap-3 text-slate-400">
             <span>LAT / LON</span>
-            <strong className="text-white">{uavPosition.lat.toFixed(3)}°N, {uavPosition.lon.toFixed(3)}°E</strong>
+            <strong className="text-white">{uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E</strong>
           </div>
           <div className="flex justify-between gap-3 text-slate-400">
             <span>ALTITUDE</span>
@@ -825,6 +848,10 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           <div className="flex justify-between gap-3 text-slate-400">
             <span>AIRSPEED</span>
             <strong className="text-emerald-400">{engineOn ? uavPosition.airspeed : 0} km/h</strong>
+          </div>
+          <div className="flex justify-between gap-3 text-slate-400">
+            <span>HEADING</span>
+            <strong className="text-cyan-400">{uavPosition.heading}°</strong>
           </div>
         </div>
 
@@ -877,7 +904,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           </div>
         </div>
 
-        {/* 6. BOTTOM-RIGHT SECTOR GRID MINI-MAP */}
+        {/* 6. BOTTOM-RIGHT SECTOR GRID MINI-MAP (Maps True Lat/Lon Coordinates) */}
         <div className="absolute bottom-2.5 right-2.5 bg-slate-900/90 backdrop-blur-md border border-cyan-500/50 rounded p-1.5 text-white font-mono text-[8px] shadow-xl z-20 pointer-events-none">
           <div className="flex justify-between items-center text-[7px] text-cyan-400 font-bold mb-1">
             <span>SECTOR GRID</span>
@@ -906,15 +933,15 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
             <div className="border-r border-cyan-500/20"></div>
             <div></div>
 
-            {/* River Outline Indicator */}
+            {/* River Indicator on Mini-Map */}
             <div className="absolute top-0 bottom-0 left-1/3 w-2.5 bg-cyan-950/40 border-r border-l border-cyan-500/20 -skew-x-12 pointer-events-none" />
 
-            {/* Live Moving UAV Blip on Mini-Map */}
+            {/* Live Moving UAV Blip on Mini-Map (Mapped directly to Lat & Lon) */}
             <div
-              className="w-2 h-2 rounded-full bg-[#F97316] border border-white shadow-[0_0_8px_#f97316] absolute transition-all duration-300"
+              className="w-2 h-2 rounded-full bg-[#F97316] border border-white shadow-[0_0_8px_#f97316] absolute transition-all duration-200"
               style={{
-                left: `${Math.min(88, Math.max(12, 20 + uavPosition.missionProgressPercent * 0.65))}%`,
-                top: `${Math.min(82, Math.max(18, 70 - uavPosition.missionProgressPercent * 0.5))}%`,
+                left: `${Math.min(92, Math.max(8, ((uavPosition.lon - 77.160) / (77.270 - 77.160)) * 100))}%`,
+                top: `${Math.min(92, Math.max(8, (1 - (uavPosition.lat - 32.500) / (32.590 - 32.500)) * 100))}%`,
                 transform: 'translate(-50%, -50%)'
               }}
             />
@@ -933,7 +960,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
 
           <div className="space-y-0.5">
             <div className="flex justify-between text-[8px] font-mono text-slate-300">
-              <span>Flight Loop Progress</span>
+              <span>Flight Track Progress</span>
               <strong className="text-[#F97316]">{Math.round(uavPosition.missionProgressPercent)}%</strong>
             </div>
             <div className="w-full bg-slate-700 h-1 rounded-full overflow-hidden">
