@@ -54,6 +54,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
   const plannedRouteLineRef = useRef<L.Polyline | null>(null);
   const actualTrackLineRef = useRef<L.Polyline | null>(null);
   const completedRouteLineRef = useRef<L.Polyline | null>(null);
+  const deviationLineRef = useRef<L.Polyline | null>(null);
   const waypointMarkersRef = useRef<L.Marker[]>([]);
   const baseTileLayerRef = useRef<L.TileLayer | null>(null);
   const actualTrackPointsRef = useRef<[number, number][]>([]);
@@ -73,7 +74,8 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     engineOn,
     flight,
     reliability,
-    followUav
+    followUav,
+    activeView
   });
 
   useEffect(() => {
@@ -83,14 +85,15 @@ export const MissionMap: React.FC<MissionMapProps> = ({
       engineOn,
       flight,
       reliability,
-      followUav
+      followUav,
+      activeView
     };
-  }, [uavPosition, flightPhase, engineOn, flight, reliability, followUav]);
+  }, [uavPosition, flightPhase, engineOn, flight, reliability, followUav, activeView]);
 
-  // Free Open Tile Layer Providers — Zero Paid API Keys Required
+  // 100% Free Open Map Tile Layers — Zero Paid API Keys Required
   const TILE_LAYERS = {
     geographic: {
-      url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
       maxZoom: 19
     },
@@ -125,7 +128,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     });
     mapInstanceRef.current = map;
 
-    // Add Base Tile Layer
+    // Add Base Tile Layer (Default OpenStreetMap)
     const currentLayerCfg = TILE_LAYERS[mapStyle];
     const tileLayer = L.tileLayer(currentLayerCfg.url, {
       maxZoom: currentLayerCfg.maxZoom,
@@ -284,9 +287,11 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     }).addTo(map);
     uavMarkerRef.current = uavMarker;
 
-    // Handle container resizing with ResizeObserver to prevent grey tiles
+    // ResizeObserver ensures Leaflet updates whenever container dimensions change
     const resizeObserver = new ResizeObserver(() => {
-      map.invalidateSize();
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
     });
     if (mapContainerRef.current) {
       resizeObserver.observe(mapContainerRef.current);
@@ -294,7 +299,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
 
     setTimeout(() => {
       map.invalidateSize();
-    }, 150);
+    }, 100);
 
     return () => {
       resizeObserver.disconnect();
@@ -312,12 +317,22 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     baseTileLayerRef.current.setUrl(cfg.url);
   }, [mapStyle]);
 
-  // Invalidate size when switching active tabs
+  // Handle seamless 2D <-> 3D view switching without destroying map
   useEffect(() => {
     if (activeView === 'map' && mapInstanceRef.current) {
-      setTimeout(() => {
+      requestAnimationFrame(() => {
+        mapInstanceRef.current?.invalidateSize({ debounceMoveend: true });
+      });
+      const t1 = setTimeout(() => {
         mapInstanceRef.current?.invalidateSize();
       }, 50);
+      const t2 = setTimeout(() => {
+        mapInstanceRef.current?.invalidateSize();
+      }, 200);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
     }
   }, [activeView]);
 
@@ -379,7 +394,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     }
 
     // Smooth Deadband Camera Tracking (Only pans when UAV drifts > 450m from center)
-    if (followUav && mapInstanceRef.current) {
+    if (followUav && mapInstanceRef.current && activeView === 'map') {
       const map = mapInstanceRef.current;
       const center = map.getCenter();
       const centerDistM = Math.hypot(
@@ -392,16 +407,16 @@ export const MissionMap: React.FC<MissionMapProps> = ({
         map.panTo([currentLat, currentLon], { animate: true, duration: 0.9 });
       }
     }
-  }, [uavPosition.lat, uavPosition.lon, uavPosition.heading, uavPosition.currentWaypointIndex, engineOn, followUav]);
+  }, [uavPosition.lat, uavPosition.lon, uavPosition.heading, uavPosition.currentWaypointIndex, engineOn, followUav, activeView]);
 
   // --------------------------------------------------------------------------
-  // 4. THREE.JS 3D TACTICAL VIEW INITIALIZATION (Separate Clean 3D Mode)
+  // 4. THREE.JS 3D TACTICAL VIEW INITIALIZATION
   // --------------------------------------------------------------------------
   useEffect(() => {
-    if (activeView !== '3d' || !threeContainerRef.current) return;
+    if (!threeContainerRef.current) return;
     const container = threeContainerRef.current;
     const width = container.clientWidth || 750;
-    const height = container.clientHeight || 350;
+    const height = container.clientHeight || 370;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a111e);
@@ -484,8 +499,10 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     let animId: number;
     const animate3D = () => {
       animId = requestAnimationFrame(animate3D);
-      const isEngineRunning = stateRef.current.engineOn;
+      const is3dActive = stateRef.current.activeView === '3d';
+      if (!is3dActive) return;
 
+      const isEngineRunning = stateRef.current.engineOn;
       if (propellerRef.current && isEngineRunning) {
         propellerRef.current.rotation.z += 0.45;
       }
@@ -527,7 +544,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
     };
-  }, [activeView]);
+  }, []);
 
   // Recenter map on UAV
   const handleRecenter = () => {
@@ -569,7 +586,6 @@ export const MissionMap: React.FC<MissionMapProps> = ({
   const routeDevKm = reliability?.routeDeviationKm ?? 0.2;
   const distRemKm = reliability?.distanceRemainingKm ?? 18.2;
   const estTimeRem = reliability?.timeRemainingFormatted ?? '07:35';
-  const missionTime = reliability?.missionTimeFormatted ?? '04:12';
 
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-3.5 shadow-sm flex flex-col justify-between h-full select-none overflow-hidden space-y-2">
@@ -582,9 +598,9 @@ export const MissionMap: React.FC<MissionMapProps> = ({
           </div>
           <div>
             <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase flex items-center gap-2">
-              <span>MISSION VIEW &mdash; GEOGRAPHIC & TERRAIN MAP</span>
-              <span className="text-[8px] font-mono font-bold bg-orange-100 text-orange-800 px-1.5 py-0.2 rounded border border-orange-300">
-                VIRTUAL MALE UAV
+              <span>MISSION MAP &mdash; REAL WORLD GEOGRAPHIC MAP</span>
+              <span className="text-[8px] font-mono font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-300">
+                OPENSTREETMAP
               </span>
             </h2>
             <div className="text-[10px] text-[#6B7280]">
@@ -655,7 +671,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
           {/* Follow UAV Toggle */}
           <button
             onClick={() => setFollowUav(!followUav)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
               followUav
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                 : 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200'
@@ -677,23 +693,25 @@ export const MissionMap: React.FC<MissionMapProps> = ({
         </div>
       </div>
 
-      {/* 2. Main Map / 3D Canvas Area */}
-      <div className="relative w-full h-[360px] rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#E2E8F0]">
+      {/* 2. Main Map / 3D Canvas Area (Seamless Absolute Layer Stack) */}
+      <div className="relative w-full h-[370px] rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#F1F5F9]">
         
-        {/* Leaflet 2D Map Container */}
+        {/* Leaflet 2D Map Container (Always in DOM to guarantee persistent tile cache & zero blanking) */}
         <div
           ref={mapContainerRef}
-          className={`w-full h-full ${activeView === 'map' ? 'block' : 'hidden'}`}
-          style={{ background: '#E2E8F0' }}
+          className={`absolute inset-0 w-full h-full transition-opacity duration-200 ${
+            activeView === 'map' ? 'opacity-100 z-10 pointer-events-auto' : 'opacity-0 z-0 pointer-events-none'
+          }`}
+          style={{ background: '#F1F5F9' }}
         />
 
-        {/* Three.js 3D Container */}
-        {activeView === '3d' && (
-          <div
-            ref={threeContainerRef}
-            className="w-full h-full block bg-[#0A111E]"
-          />
-        )}
+        {/* Three.js 3D Container (Always in DOM for instant smooth toggle) */}
+        <div
+          ref={threeContainerRef}
+          className={`absolute inset-0 w-full h-full bg-[#0A111E] transition-opacity duration-200 ${
+            activeView === '3d' ? 'opacity-100 z-20 pointer-events-auto' : 'opacity-0 z-0 pointer-events-none'
+          }`}
+        />
 
         {/* Zoom In / Out Overlay Controls (For Leaflet Map) */}
         {activeView === 'map' && (
@@ -887,10 +905,10 @@ export const MissionMap: React.FC<MissionMapProps> = ({
           </div>
         </div>
 
-        {/* Attribution watermark */}
+        {/* Attribution watermark (Always displayed on Map view) */}
         {activeView === 'map' && (
-          <div className="absolute bottom-1 right-2 bg-white/70 backdrop-blur-xs px-1.5 py-0.2 rounded text-[8px] text-gray-700 z-[500] pointer-events-auto hidden sm:block">
-            &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="underline hover:text-black">OpenStreetMap</a> contributors
+          <div className="absolute bottom-1 right-2 bg-white/75 backdrop-blur-xs px-1.5 py-0.5 rounded text-[8.5px] text-gray-800 z-[500] pointer-events-auto border border-gray-300 shadow-xs hidden sm:block font-sans">
+            &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="underline hover:text-black font-semibold">OpenStreetMap</a> contributors
           </div>
         )}
       </div>
