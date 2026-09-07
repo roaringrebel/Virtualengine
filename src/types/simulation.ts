@@ -137,6 +137,7 @@ export interface MissionReliabilityState {
   anomalyScore: number;             // 0.0 - 1.0
   missionProgressPercent: number;   // 0 - 100%
   distanceRemainingKm: number;      // km
+  totalMissionDistanceKm?: number;  // km
   timeRemainingSeconds: number;     // seconds
   timeRemainingFormatted: string;   // mm:ss
   missionTimeFormatted: string;     // mm:ss

@@ -47,7 +47,8 @@ export interface MissionEventLog {
   id: string;
   simTimestamp: string;
   message: string;
-  category: 'INFO' | 'FLIGHT' | 'ENGINE' | 'FAULT' | 'TELEMETRY';
+  category: 'INFO' | 'FLIGHT' | 'ENGINE' | 'FAULT' | 'TELEMETRY' | 'MISSION';
+  phase?: string;
 }
 
 export interface UAVPosition {

@@ -643,13 +643,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({
           </div>
           <div>
             <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase flex items-center gap-2">
-              <span>GEOGRAPHIC MISSION MAP</span>
+              <span>GEOGRAPHIC FLIGHT VISUALIZATION</span>
               <span className="text-[8px] font-mono font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-300">
                 OPENSTREETMAP
               </span>
             </h2>
             <div className="text-[10px] text-[#6B7280]">
-              Reduced-Order Rotax 912 ULS Simulation &bull; Live Geodesic Flight Dynamics
+              Real-World Map &bull; Geodesic Navigation &bull; Virtual UAV
             </div>
           </div>
         </div>
@@ -837,6 +837,32 @@ export const MissionMap: React.FC<MissionMapProps> = ({
             <div className="text-slate-400">VSI:</div>
             <div className="text-right text-slate-200">
               {Number(verticalSpeedMs) >= 0 ? `+${verticalSpeedMs}` : verticalSpeedMs} m/s
+            </div>
+          </div>
+        </div>
+
+        {/* TOP-RIGHT: FLOATING MISSION ROUTE STATUS HUD (Requirement 48) */}
+        <div className="absolute top-2 right-2 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1 w-[190px]">
+          <div className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider border-b border-slate-800 pb-1 flex items-center justify-between">
+            <span>ROUTE STATUS</span>
+            <span className="text-orange-400 font-bold">{reliability?.missionProgressPercent ?? uavPosition.missionProgressPercent}%</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5">
+            <div className="text-slate-400">REMAINING:</div>
+            <div className="text-right text-white font-bold">{reliability?.distanceRemainingKm ?? 0} km</div>
+
+            <div className="text-slate-400">EST. TIME:</div>
+            <div className="text-right text-emerald-400 font-bold">{reliability?.timeRemainingFormatted ?? '--:--'}</div>
+
+            <div className="text-slate-400">DEVIATION:</div>
+            <div className={`text-right font-bold ${(reliability?.routeDeviationKm ?? 0) > 0.6 ? 'text-amber-400' : 'text-cyan-300'}`}>
+              {reliability?.routeDeviationKm ?? 0} km
+            </div>
+
+            <div className="text-slate-400">STATUS:</div>
+            <div className={`text-right font-bold ${(reliability?.routeDeviationKm ?? 0) > 0.6 ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {(reliability?.routeDeviationKm ?? 0) > 0.6 ? 'CAUTION' : 'ON ROUTE'}
             </div>
           </div>
         </div>
