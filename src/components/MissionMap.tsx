@@ -14,7 +14,7 @@ import {
   Navigation,
   Compass
 } from 'lucide-react';
-import { FlightPhase } from '../types/simulation';
+import { FlightPhase, FlightState } from '../types/simulation';
 import { UAVPosition } from '../types/mission';
 import { MISSION_WAYPOINTS } from '../simulation/simulationEngine';
 
@@ -22,9 +22,10 @@ interface MissionMapProps {
   uavPosition: UAVPosition;
   flightPhase: FlightPhase;
   engineOn: boolean;
+  flight?: FlightState;
 }
 
-export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase, engineOn }) => {
+export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase, engineOn, flight }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   
   // Camera & View modes
@@ -832,27 +833,50 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
         </div>
 
         {/* 3. TOP-LEFT TACTICAL HUD TELEMETRY BOX */}
-        <div className="absolute top-2.5 left-2.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/70 rounded p-2 text-white font-mono text-[9px] space-y-0.5 shadow-xl z-20 pointer-events-none">
-          <div className="flex justify-between gap-3 text-slate-400">
+        <div className="absolute top-2.5 left-2.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/70 rounded p-2 text-white font-mono text-[8.5px] space-y-0.5 shadow-xl z-20 pointer-events-none min-w-[170px]">
+          <div className="flex justify-between gap-2 text-slate-400">
             <span>AIRCRAFT</span>
             <strong className="text-[#F97316]">ROTAX 912 MALE UAV</strong>
           </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>LAT / LON</span>
+          <div className="flex justify-between gap-2 text-slate-400">
+            <span>POSITION</span>
             <strong className="text-white">{uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E</strong>
           </div>
-          <div className="flex justify-between gap-3 text-slate-400">
+          <div className="flex justify-between gap-2 text-slate-400">
             <span>ALTITUDE</span>
-            <strong className="text-[#F97316]">{engineOn ? uavPosition.altitude.toLocaleString() : 0} ft</strong>
+            <strong className="text-[#F97316]">
+              {engineOn ? uavPosition.altitude.toLocaleString() : 0} ft
+              {flight && flight.verticalSpeed !== 0 && (
+                <span className={`ml-1 text-[7.5px] ${flight.verticalSpeed > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  ({flight.verticalSpeed > 0 ? `+${flight.verticalSpeed}` : flight.verticalSpeed} fpm)
+                </span>
+              )}
+            </strong>
           </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>AIRSPEED</span>
-            <strong className="text-emerald-400">{engineOn ? uavPosition.airspeed : 0} km/h</strong>
+          <div className="flex justify-between gap-2 text-slate-400">
+            <span>AIR / GRD SPD</span>
+            <strong className="text-emerald-400">
+              {engineOn ? uavPosition.airspeed : 0} / {engineOn && flight ? flight.groundSpeed : 0} km/h
+            </strong>
           </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>HEADING</span>
-            <strong className="text-cyan-400">{uavPosition.heading}°</strong>
+          <div className="flex justify-between gap-2 text-slate-400">
+            <span>HDG / TRK</span>
+            <strong className="text-cyan-400">
+              {uavPosition.heading}° / {flight?.groundTrack ?? uavPosition.heading}°
+            </strong>
           </div>
+          {flight && (
+            <div className="flex justify-between gap-2 text-slate-400 border-t border-slate-800 pt-0.5">
+              <span>WIND</span>
+              <strong className="text-blue-300">{flight.windSpeed} km/h @ {flight.windDirection}°</strong>
+            </div>
+          )}
+          {flight && flight.currentWaypointName && (
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>TARGET WP</span>
+              <strong className="text-amber-300 truncate max-w-[100px]">{flight.currentWaypointName}</strong>
+            </div>
+          )}
         </div>
 
         {/* 4. LEFT FLOATING ZOOM & CAMERA CONTROL DOCK */}

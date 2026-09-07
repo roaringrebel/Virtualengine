@@ -3,43 +3,77 @@ import { Rotax912EngineModel } from './rotax912Model';
 import { Rotax912ThermalModel } from './thermalModel';
 import { SensorSuiteModel } from './sensorModel';
 import { createInitialFaultState, FAULT_DEFINITIONS } from './faultModel';
-import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, SimulationState } from '../types/simulation';
+import { FlightDynamicsModel, MISSION_WAYPOINTS } from './flightDynamicsModel';
+import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, FlightState, SimulationState } from '../types/simulation';
 import { TelemetryPacket } from '../types/telemetry';
-import { UAVPosition, Waypoint } from '../types/mission';
+import { UAVPosition } from '../types/mission';
 
-export const MISSION_WAYPOINTS: Waypoint[] = [
-  { id: 'wp1', name: 'WP1 — TAKEOFF / AIRBASE', lat: 32.5280, lon: 77.1850, altitudeFt: 500, targetAirspeedKmh: 95, type: 'TAKEOFF', description: 'Runway departure and initial climb' },
-  { id: 'wp2', name: 'WP2 — RIVER CORRIDOR', lat: 32.5420, lon: 77.2050, altitudeFt: 4500, targetAirspeedKmh: 130, type: 'CLIMB', description: 'Climb along the central river valley' },
-  { id: 'wp3', name: 'WP3 — URBAN CENTER', lat: 32.5650, lon: 77.2280, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Active tactical surveillance over city blocks' },
-  { id: 'wp4', name: 'WP4 — NORTH EAST HILLS', lat: 32.5780, lon: 77.2550, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Highland perimeter patrol' },
-  { id: 'wp5', name: 'WP5 — RECOVERY VECTOR', lat: 32.5480, lon: 77.2420, altitudeFt: 3500, targetAirspeedKmh: 120, type: 'RETURN', description: 'Descent to approach corridor' },
-  { id: 'base', name: 'BASE — RUNWAY', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 0, type: 'BASE', description: 'Home airbase runway' },
-];
+export { MISSION_WAYPOINTS };
 
+/**
+ * Central Simulation Engine
+ * Single source of truth unifying the physics-inspired flight dynamics model,
+ * Reduced-Order Rotax 912 ULS engine model, thermodynamics, sensor suite,
+ * and unified real-time telemetry generation.
+ */
 export class SimulationEngine {
+  private flightModel = new FlightDynamicsModel();
   private engineModel = new Rotax912EngineModel();
   private thermalModel = new Rotax912ThermalModel();
   private sensorModel = new SensorSuiteModel();
 
   public state: SimulationState;
   public uavPosition: UAVPosition;
-  private waypoints = MISSION_WAYPOINTS;
-  private currentWpIndex = 0;
+
+  // Synchronization Metadata
+  public simulationId: string = `SIM-${Date.now().toString(36).toUpperCase()}`;
+  public sequenceNumber: number = 0;
 
   constructor() {
     const initialControls: FlightControlsState = {
       throttle: 70,
-      altitude: 8000,
-      airspeed: 145,
-      heading: 270,
-      latitude: 32.5450,
-      longitude: 77.2150,
+      targetAltitude: 8000,
+      targetAirspeed: 145,
+      targetHeading: 270,
       ambientTemp: 30,
       engineLoad: 70,
       navigationMode: 'MANUAL_PILOT',
+      windSpeed: 12,
+      windDirection: 240,
+      latitude: 32.5450,
+      longitude: 77.2150,
+      heading: 270,
+      altitude: 8000,
+      airspeed: 145
     };
 
-    const initialAtmosphere = calculateAtmosphere(initialControls.altitude, initialControls.ambientTemp);
+    const initialFlight: FlightState = {
+      latitude: 32.5450,
+      longitude: 77.2150,
+      altitude: 0,
+      heading: 270,
+      airspeed: 0,
+      groundSpeed: 0,
+      verticalSpeed: 0,
+      groundTrack: 270,
+      targetHeading: 270,
+      targetAltitude: 8000,
+      targetAirspeed: 145,
+      throttle: 70,
+      engineLoad: 70,
+      flightPhase: 'STANDBY',
+      windSpeed: 12,
+      windDirection: 240,
+      currentWaypointIndex: 0,
+      currentWaypointName: MISSION_WAYPOINTS[0].name,
+      distanceToWaypointKm: 0,
+      bearingToWaypointDeg: 270,
+      missionProgressPercent: 0,
+      turnRateDegPerSec: 0,
+      bankAngleDeg: 0,
+    };
+
+    const initialAtmosphere = calculateAtmosphere(0, initialControls.ambientTemp);
     const initialFault = createInitialFaultState();
 
     // Default to Engine OFF / STANDBY on initial load
@@ -53,11 +87,13 @@ export class SimulationEngine {
 
     this.state = {
       isRunning: true,
+      isPaused: false,
       engineOn: false, // Engine OFF initially
       simTimeSeconds: 0,
       speedMultiplier: 1.0,
       sensorNoiseEnabled: true,
       flightPhase: 'STANDBY',
+      flight: initialFlight,
       controls: initialControls,
       atmosphere: initialAtmosphere,
       engine: initialEngine,
@@ -67,11 +103,11 @@ export class SimulationEngine {
     };
 
     this.uavPosition = {
-      lat: initialControls.latitude,
-      lon: initialControls.longitude,
+      lat: initialFlight.latitude,
+      lon: initialFlight.longitude,
       altitude: 0,
       airspeed: 0,
-      heading: initialControls.heading,
+      heading: initialFlight.heading,
       currentWaypointIndex: 0,
       distanceToNextKm: 0,
       missionProgressPercent: 0,
@@ -82,45 +118,52 @@ export class SimulationEngine {
     this.state.engineOn = isOn;
     if (!isOn) {
       this.state.flightPhase = 'STANDBY';
-      this.uavPosition.airspeed = 0;
-      this.state.controls.airspeed = 0;
+      this.state.flight.flightPhase = 'STANDBY';
     } else {
       if (this.state.controls.throttle > 50) {
         this.state.flightPhase = 'CRUISE';
-        this.state.controls.airspeed = Math.round(90 + (this.state.controls.throttle / 100) * 80);
-        this.uavPosition.airspeed = this.state.controls.airspeed;
+        this.state.flight.flightPhase = 'CRUISE';
       } else {
         this.state.flightPhase = 'STARTUP';
-        this.state.controls.airspeed = 45;
-        this.uavPosition.airspeed = 45;
+        this.state.flight.flightPhase = 'STARTUP';
       }
     }
+  }
+
+  public setPause(paused: boolean): void {
+    this.state.isPaused = paused;
+  }
+
+  public setSpeedMultiplier(multiplier: number): void {
+    this.state.speedMultiplier = Math.max(0.5, Math.min(5.0, multiplier));
   }
 
   public setControl<K extends keyof FlightControlsState>(key: K, value: FlightControlsState[K]): void {
     this.state.controls[key] = value;
 
-    // Direct synchronization of position coordinates & heading
-    if (key === 'latitude') {
-      this.uavPosition.lat = value as number;
-    } else if (key === 'longitude') {
-      this.uavPosition.lon = value as number;
-    } else if (key === 'heading') {
-      this.uavPosition.heading = value as number;
-    } else if (key === 'altitude') {
-      this.uavPosition.altitude = this.state.engineOn ? (value as number) : 0;
-    } else if (key === 'airspeed') {
-      this.uavPosition.airspeed = this.state.engineOn ? (value as number) : 0;
-    } else if (key === 'throttle') {
-      // Throttle couples naturally to airspeed in continuous flight
-      if (this.state.engineOn) {
-        const targetSpeed = Math.round(70 + ((value as number) / 100) * 110);
-        this.state.controls.airspeed = targetSpeed;
-        this.uavPosition.airspeed = targetSpeed;
-      }
+    if (key === 'throttle') {
+      this.flightModel.throttle = value as number;
+    } else if (key === 'targetHeading' || key === 'heading') {
+      this.flightModel.targetHeading = value as number;
+      this.state.controls.targetHeading = value as number;
+      this.state.controls.heading = value as number;
+    } else if (key === 'targetAltitude' || key === 'altitude') {
+      this.flightModel.targetAltitude = value as number;
+      this.state.controls.targetAltitude = value as number;
+      this.state.controls.altitude = value as number;
+    } else if (key === 'targetAirspeed' || key === 'airspeed') {
+      this.flightModel.targetAirspeed = value as number;
+      this.state.controls.targetAirspeed = value as number;
+      this.state.controls.airspeed = value as number;
+    } else if (key === 'navigationMode') {
+      this.flightModel.navigationMode = value as any;
+    } else if (key === 'windSpeed') {
+      this.flightModel.windSpeed = value as number;
+    } else if (key === 'windDirection') {
+      this.flightModel.windDirection = value as number;
+    } else if (key === 'engineLoad') {
+      this.flightModel.engineLoad = value as number;
     }
-
-    this.updateFlightPhaseFromControls();
   }
 
   public setFault(faultType: FaultType, severity: FaultSeverity = 'MEDIUM'): void {
@@ -139,19 +182,34 @@ export class SimulationEngine {
   }
 
   public resetSimulation(): void {
+    this.simulationId = `SIM-${Date.now().toString(36).toUpperCase()}`;
+    this.sequenceNumber = 0;
+
     this.setEngineOn(false);
+    this.state.isPaused = false;
+    this.state.simTimeSeconds = 0;
+
+    this.flightModel.resetToInitialState();
+
     this.state.controls = {
       throttle: 70,
-      altitude: 8000,
-      airspeed: 145,
-      heading: 270,
-      latitude: 32.5450,
-      longitude: 77.2150,
+      targetAltitude: 8000,
+      targetAirspeed: 145,
+      targetHeading: 270,
       ambientTemp: 30,
       engineLoad: 70,
       navigationMode: 'MANUAL_PILOT',
+      windSpeed: 12,
+      windDirection: 240,
+      latitude: 32.5450,
+      longitude: 77.2150,
+      heading: 270,
+      altitude: 8000,
+      airspeed: 145
     };
+
     this.clearFault();
+
     this.uavPosition = {
       lat: 32.5450,
       lon: 77.2150,
@@ -164,46 +222,36 @@ export class SimulationEngine {
     };
   }
 
-  private updateFlightPhaseFromControls(): void {
-    if (!this.state.engineOn) {
-      this.state.flightPhase = 'STANDBY';
-      return;
-    }
-    const { throttle, altitude } = this.state.controls;
-    if (throttle < 20 && altitude < 100) {
-      this.state.flightPhase = 'STARTUP';
-    } else if (throttle >= 85 && altitude < 1500) {
-      this.state.flightPhase = 'TAKEOFF';
-    } else if (throttle >= 75 && altitude < 6000) {
-      this.state.flightPhase = 'CLIMB';
-    } else if (throttle <= 40 && altitude > 2000) {
-      this.state.flightPhase = 'DESCENT';
-    } else if (throttle <= 30 && altitude <= 1000) {
-      this.state.flightPhase = 'LANDING';
-    } else {
-      this.state.flightPhase = 'CRUISE';
-    }
-  }
-
   /**
    * Main Physics Tick (30Hz - 60Hz)
    */
   public update(dtSeconds: number): void {
+    if (this.state.isPaused) return;
+
     const effectiveDt = dtSeconds * this.state.speedMultiplier;
     this.state.simTimeSeconds += effectiveDt;
     this.state.fault.elapsedSeconds += effectiveDt;
 
     // 1. Atmosphere Physics Calculation
     this.state.atmosphere = calculateAtmosphere(
-      this.state.engineOn ? this.state.controls.altitude : 0,
+      this.state.engineOn ? this.flightModel.altitude : 0,
       this.state.controls.ambientTemp
     );
 
     // 2. Rotax 912 Engine Physics
+    // Pass current flight airspeed & altitude for accurate cooling & density derating
+    const engineControlsInput: FlightControlsState = {
+      ...this.state.controls,
+      airspeed: this.flightModel.airspeed,
+      altitude: this.flightModel.altitude,
+      throttle: this.flightModel.throttle,
+      engineLoad: this.state.controls.engineLoad
+    };
+
     this.state.engine = this.engineModel.update(
       effectiveDt,
       this.state.engineOn,
-      this.state.controls,
+      engineControlsInput,
       this.state.atmosphere,
       this.state.fault,
       this.state.simTimeSeconds
@@ -213,7 +261,7 @@ export class SimulationEngine {
     this.state.thermal = this.thermalModel.update(
       effectiveDt,
       this.state.engine,
-      this.state.controls,
+      engineControlsInput,
       this.state.atmosphere,
       this.state.fault
     );
@@ -226,121 +274,102 @@ export class SimulationEngine {
       this.state.simTimeSeconds
     );
 
-    // 5. True Geodetic Flight Navigation & Position Propagation
-    if (this.state.engineOn) {
-      this.updateUAVNavigation(effectiveDt);
-    }
-  }
+    // 5. Central Flight Dynamics & Geodesic Navigation Engine
+    this.state.flight = this.flightModel.update(
+      effectiveDt,
+      this.state.engineOn,
+      this.state.engine.powerHp,
+      this.state.simTimeSeconds
+    );
 
-  private updateUAVNavigation(dt: number): void {
-    const airspeedKmh = this.state.controls.airspeed || 145;
-    const speedMs = (airspeedKmh * 1000) / 3600; // m/s
-    const distanceMovedMeters = speedMs * dt;
+    this.state.flightPhase = this.state.flight.flightPhase;
 
-    if (this.state.controls.navigationMode === 'MANUAL_PILOT') {
-      // Direct Manual Dead-Reckoning Navigation along chosen Heading
-      const headingRad = (this.state.controls.heading * Math.PI) / 180;
-      
-      // Spherical Geodesy displacement:
-      // 1 degree latitude ~ 111,139 meters
-      // 1 degree longitude ~ 111,139 * cos(lat) meters
-      const deltaLat = (distanceMovedMeters * Math.cos(headingRad)) / 111139;
-      const currentLatRad = (this.uavPosition.lat * Math.PI) / 180;
-      const deltaLon = (distanceMovedMeters * Math.sin(headingRad)) / (111139 * Math.max(0.1, Math.cos(currentLatRad)));
+    // 6. Synchronize UAV Position for Map & UI
+    this.uavPosition = {
+      lat: this.state.flight.latitude,
+      lon: this.state.flight.longitude,
+      altitude: this.state.flight.altitude,
+      airspeed: this.state.flight.airspeed,
+      heading: this.state.flight.heading,
+      currentWaypointIndex: this.state.flight.currentWaypointIndex,
+      distanceToNextKm: this.state.flight.distanceToWaypointKm,
+      missionProgressPercent: this.state.flight.missionProgressPercent,
+    };
 
-      this.uavPosition.lat += deltaLat;
-      this.uavPosition.lon += deltaLon;
-
-      // Keep within realistic operational map boundaries
-      if (this.uavPosition.lat > 32.595) this.uavPosition.lat = 32.505;
-      if (this.uavPosition.lat < 32.505) this.uavPosition.lat = 32.595;
-      if (this.uavPosition.lon > 77.280) this.uavPosition.lon = 77.160;
-      if (this.uavPosition.lon < 77.160) this.uavPosition.lon = 77.280;
-
-      // Sync controls
-      this.state.controls.latitude = Number(this.uavPosition.lat.toFixed(4));
-      this.state.controls.longitude = Number(this.uavPosition.lon.toFixed(4));
-
-      // Progress accumulation
-      this.uavPosition.missionProgressPercent = (this.uavPosition.missionProgressPercent + (distanceMovedMeters / 500)) % 100;
-    } else {
-      // Tactical Waypoint Corridor Following
-      const targetWp = this.waypoints[this.currentWpIndex];
-      if (targetWp) {
-        const dLat = targetWp.lat - this.uavPosition.lat;
-        const dLon = targetWp.lon - this.uavPosition.lon;
-        const distKm = Math.sqrt(dLat * dLat + dLon * dLon) * 111.139;
-
-        // Auto calculate heading towards target waypoint
-        const targetHeadingRad = Math.atan2(dLon, dLat);
-        let targetHeadingDeg = (targetHeadingRad * 180) / Math.PI;
-        if (targetHeadingDeg < 0) targetHeadingDeg += 360;
-
-        // Smooth steering toward waypoint
-        const currentHeading = this.state.controls.heading;
-        let headingDiff = targetHeadingDeg - currentHeading;
-        if (headingDiff > 180) headingDiff -= 360;
-        if (headingDiff < -180) headingDiff += 360;
-        
-        const newHeading = (currentHeading + headingDiff * Math.min(1.0, dt * 2.0) + 360) % 360;
-        this.state.controls.heading = Math.round(newHeading);
-        this.uavPosition.heading = this.state.controls.heading;
-
-        // Move toward waypoint
-        const headingRad = (this.state.controls.heading * Math.PI) / 180;
-        const deltaLat = (distanceMovedMeters * Math.cos(headingRad)) / 111139;
-        const currentLatRad = (this.uavPosition.lat * Math.PI) / 180;
-        const deltaLon = (distanceMovedMeters * Math.sin(headingRad)) / (111139 * Math.max(0.1, Math.cos(currentLatRad)));
-
-        this.uavPosition.lat += deltaLat;
-        this.uavPosition.lon += deltaLon;
-
-        this.state.controls.latitude = Number(this.uavPosition.lat.toFixed(4));
-        this.state.controls.longitude = Number(this.uavPosition.lon.toFixed(4));
-        this.uavPosition.distanceToNextKm = Number(distKm.toFixed(1));
-
-        if (distKm < 0.35) {
-          this.currentWpIndex = (this.currentWpIndex + 1) % this.waypoints.length;
-          this.uavPosition.currentWaypointIndex = this.currentWpIndex;
-        }
-
-        // Mission %
-        this.uavPosition.missionProgressPercent = Number(((this.currentWpIndex / this.waypoints.length) * 100).toFixed(0));
-      }
-    }
-
-    this.uavPosition.altitude = this.state.controls.altitude;
-    this.uavPosition.airspeed = this.state.controls.airspeed;
-    this.uavPosition.heading = this.state.controls.heading;
+    // Keep controls in sync for UI readouts
+    this.state.controls.latitude = this.state.flight.latitude;
+    this.state.controls.longitude = this.state.flight.longitude;
+    this.state.controls.heading = this.state.flight.heading;
+    this.state.controls.altitude = this.state.flight.altitude;
+    this.state.controls.airspeed = this.state.flight.airspeed;
   }
 
   /**
-   * Generates Telemetry JSON packet matching external interface contract
+   * Generates Unified Telemetry JSON packet matching external interface contract
    */
   public getTelemetryPacket(): TelemetryPacket {
+    this.sequenceNumber++;
+
+    let numericSeverity = 0;
+    if (this.state.fault.activeFault !== 'NORMAL') {
+      numericSeverity = this.state.fault.severity === 'LOW' ? 0.5 : this.state.fault.severity === 'HIGH' ? 1.0 : 0.8;
+    }
+
+    const activeFaultLower = this.state.fault.activeFault.toLowerCase();
+
     return {
       timestamp: new Date().toISOString(),
+      simulation_id: this.simulationId,
+      sequence_number: this.sequenceNumber,
       aircraft: 'MALE_UAV',
       engine: 'ROTAX_912_ULS',
       flight_phase: this.state.flightPhase,
       engine_on: this.state.engineOn,
+
+      // Rotax 912 Sensors
       rpm: this.state.sensors.rpm.value,
-      cht: this.state.sensors.cht.value,
-      egt: this.state.sensors.egt.value,
-      oil_pressure: this.state.sensors.oilPressure.value,
-      oil_temperature: this.state.sensors.oilTemperature.value,
-      vibration: this.state.sensors.vibration.value,
-      fuel_flow: this.state.sensors.fuelFlow.value,
-      fuel_pressure: this.state.sensors.fuelPressure.value,
-      map: this.state.sensors.map.value,
-      altitude: Math.round(this.state.engineOn ? this.state.controls.altitude : 0),
-      airspeed: Math.round(this.state.engineOn ? this.state.controls.airspeed : 0),
-      heading: Math.round(this.state.controls.heading),
-      throttle: Math.round(this.state.controls.throttle),
+      cht: Number(this.state.thermal.cht.toFixed(2)),
+      egt: Number(this.state.thermal.egt.toFixed(1)),
+      oil_pressure: Number(this.state.thermal.oilPressure.toFixed(2)),
+      oil_temperature: Number(this.state.thermal.oilTemperature.toFixed(2)),
+      oil_temp: Number(this.state.thermal.oilTemperature.toFixed(2)),
+      vibration: Number(this.state.engine.vibration.toFixed(2)),
+      fuel_flow: Number(this.state.engine.fuelFlow.toFixed(2)),
+      fuel_pressure: Number(this.state.engine.fuelPressure.toFixed(2)),
+      map: Number(this.state.engine.manifoldPressure.toFixed(2)),
+
+      // Flight Dynamics & Navigation
+      latitude: this.state.flight.latitude,
+      longitude: this.state.flight.longitude,
+      altitude: this.state.flight.altitude,
+      airspeed: this.state.flight.airspeed,
+      ground_speed: this.state.flight.groundSpeed,
+      vertical_speed: this.state.flight.verticalSpeed,
+      heading: this.state.flight.heading,
+      ground_track: this.state.flight.groundTrack,
+
+      // Autopilot & Waypoints
+      target_heading: this.state.flight.targetHeading,
+      target_altitude: this.state.flight.targetAltitude,
+      target_airspeed: this.state.flight.targetAirspeed,
+      waypoint: this.state.flight.currentWaypointName,
+      waypoint_distance_km: this.state.flight.distanceToWaypointKm,
+      mission_progress: this.state.flight.missionProgressPercent,
+
+      // Controls & Environment
+      throttle: this.state.flight.throttle,
       engine_load: Math.round(this.state.engineOn ? this.state.controls.engineLoad : 0),
-      ambient_temp: Math.round(this.state.controls.ambientTemp),
+      engineLoad: Math.round(this.state.engineOn ? this.state.controls.engineLoad : 0),
+      ambient_temperature: Number(this.state.controls.ambientTemp.toFixed(1)),
+      ambient_temp: Number(this.state.controls.ambientTemp.toFixed(1)),
+      wind_speed: this.state.flight.windSpeed,
+      wind_direction: this.state.flight.windDirection,
+
+      // Fault Diagnostics
       fault: this.state.fault.activeFault,
-      fault_severity: this.state.fault.severity
+      fault_severity: numericSeverity,
+      preset: activeFaultLower === 'normal' ? 'nominal' : activeFaultLower,
+      afr: this.state.fault.activeFault === 'FUEL_PRESSURE_DROP' ? 17.2 : 14.7
     };
   }
 }

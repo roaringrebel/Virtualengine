@@ -8,8 +8,9 @@ import { FaultSimulation } from './components/FaultSimulation';
 import { RealtimeGraphs } from './components/RealtimeGraphs';
 import { TelemetryStream } from './components/TelemetryStream';
 import { MissionTimeline } from './components/MissionTimeline';
-import { DemoMode } from './components/DemoMode';
+import { DemoMode, DEMO_STAGES } from './components/DemoMode';
 import { SystemArchitecture } from './components/SystemArchitecture';
+import { FlightDebugPanel } from './components/FlightDebugPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { MissionLogModal } from './components/MissionLogModal';
 import { TelemetryModal } from './components/TelemetryModal';
@@ -33,11 +34,15 @@ export const App: React.FC = () => {
     endpoint: telemetryRef.current.endpoint,
     isStreaming: true,
     status: 'LOCAL_SIMULATION_MODE',
-    packetsSent: 1248,
+    packetsSent: 0,
     packetsFailed: 0,
-    lastTransmissionTime: '10:42:18',
-    latencyMs: 14,
+    lastTransmissionTime: null,
+    lastHttpStatus: null,
+    lastError: null,
+    latencyMs: 0,
     transmissionRateHz: 1,
+    simulationId: simRef.current.simulationId,
+    sequenceNumber: 0,
   });
   const [latestPacket, setLatestPacket] = useState<TelemetryPacket | null>(null);
 
@@ -50,7 +55,7 @@ export const App: React.FC = () => {
 
   // Mission event logs
   const [eventLogs, setEventLogs] = useState<MissionEventLog[]>([
-    { id: '1', simTimestamp: '10:40:12', message: 'Simulation initialized in Standby mode', category: 'INFO' },
+    { id: '1', simTimestamp: '10:40:12', message: 'Simulation initialized: Reduced-Order Rotax 912 ULS Physics Engine', category: 'INFO' },
   ]);
 
   // Demo mode state
@@ -99,35 +104,70 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Demo Sequence Orchestrator
+  // 8-Stage Deterministic Demo Sequence Orchestrator
   useEffect(() => {
     if (!isDemoRunning) return;
 
     const timer = setInterval(() => {
       setDemoStepRemaining(prev => {
         if (prev <= 1) {
-          // Advance demo step
-          if (demoStep === 1) {
+          // Advance to next stage
+          const nextStep = demoStep + 1;
+          if (nextStep === 2) {
+            // Stage 2: Takeoff & Climb
             setDemoStep(2);
-            simRef.current.setControl('throttle', 95);
-            simRef.current.setControl('engineLoad', 85);
-            addEventLog('Demo Step 2: Increasing engine load to 85%', 'ENGINE');
-            return 10;
-          } else if (demoStep === 2) {
+            simRef.current.setControl('throttle', 92);
+            simRef.current.setControl('targetAltitude', 4500);
+            simRef.current.setControl('targetAirspeed', 135);
+            addEventLog('Demo Stage 2: Takeoff thrust applied (92%), climbing to 4,500 ft', 'FLIGHT');
+            return 8;
+          } else if (nextStep === 3) {
+            // Stage 3: Waypoint Auto Cruise
             setDemoStep(3);
-            simRef.current.setFault('EXCESSIVE_VIBRATION', 'HIGH');
-            addEventLog('Demo Step 3: Injected Excessive Vibration fault (HIGH)', 'FAULT');
-            return 12;
-          } else if (demoStep === 3) {
+            simRef.current.setControl('navigationMode', 'WAYPOINT_ROUTE');
+            simRef.current.setControl('targetAltitude', 8000);
+            simRef.current.setControl('targetAirspeed', 145);
+            addEventLog('Demo Stage 3: Waypoint Autopilot engaged along tactical route corridor', 'FLIGHT');
+            return 8;
+          } else if (nextStep === 4) {
+            // Stage 4: High Engine Load
             setDemoStep(4);
-            addEventLog('Demo Step 4: Live sensor values changing & streaming to Digital Twin', 'TELEMETRY');
+            simRef.current.setControl('throttle', 85);
+            simRef.current.setControl('engineLoad', 85);
+            addEventLog('Demo Stage 4: Engine load increased to 85% for payload surveillance', 'ENGINE');
+            return 6;
+          } else if (nextStep === 5) {
+            // Stage 5: Inject Excessive Vibration
+            setDemoStep(5);
+            simRef.current.setFault('EXCESSIVE_VIBRATION', 'HIGH');
+            addEventLog('Demo Stage 5: FAULT INJECTED — Excessive Vibration (HIGH, > 6.5 mm/s RMS)', 'FAULT');
+            return 8;
+          } else if (nextStep === 6) {
+            // Stage 6: Power Sag & Airspeed Decay
+            setDemoStep(6);
+            addEventLog('Demo Stage 6: Engine power derated by 18%. RPM instability and airspeed decay observed.', 'ENGINE');
+            return 8;
+          } else if (nextStep === 7) {
+            // Stage 7: Telemetry Streaming
+            setDemoStep(7);
+            addEventLog('Demo Stage 7: Live telemetry dispatched to Digital Twin (Website 2) with anomaly alerts.', 'TELEMETRY');
+            return 8;
+          } else if (nextStep === 8) {
+            // Stage 8: Fault Clearance & RTB
+            setDemoStep(8);
+            simRef.current.clearFault();
+            simRef.current.setControl('navigationMode', 'MANUAL_PILOT');
+            simRef.current.setControl('targetAltitude', 3500);
+            simRef.current.setControl('throttle', 70);
+            simRef.current.setControl('engineLoad', 70);
+            addEventLog('Demo Stage 8: Fault CLEARED. Normal engine thermodynamics restored. Vectoring RTB.', 'INFO');
             return 8;
           } else {
-            // Finish demo
+            // Finish Demo
             setIsDemoRunning(false);
             setDemoStep(1);
             simRef.current.clearFault();
-            addEventLog('Demo Scenario completed. Returned to nominal cruise.', 'INFO');
+            addEventLog('Demo Scenario Finished: All 8 judging stages completed successfully.', 'INFO');
             return 8;
           }
         }
@@ -138,16 +178,37 @@ export const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [isDemoRunning, demoStep]);
 
-  // Handlers for Starting and Stopping Engine
+  // Handlers for Engine & Simulation Controls
   const handleStartEngine = () => {
     simRef.current.setEngineOn(true);
-    addEventLog('ENGINE START: Ignition ON, starting Rotax 912 ULS aero-piston engine', 'ENGINE');
+    addEventLog('ENGINE START: Ignition ON, Rotax 912 ULS aero-piston running', 'ENGINE');
   };
 
   const handleStopEngine = () => {
     simRef.current.setEngineOn(false);
     if (isDemoRunning) setIsDemoRunning(false);
     addEventLog('ENGINE STOP: Ignition CUTOFF, engine spooled down to Standby (0 RPM)', 'ENGINE');
+  };
+
+  const handleTogglePause = () => {
+    const nextPaused = !simState.isPaused;
+    simRef.current.setPause(nextPaused);
+    setSimState({ ...simRef.current.state });
+    addEventLog(nextPaused ? 'Simulation PAUSED' : 'Simulation RESUMED', 'INFO');
+  };
+
+  const handleChangeSpeed = (speed: number) => {
+    simRef.current.setSpeedMultiplier(speed);
+    setSimState({ ...simRef.current.state });
+    addEventLog(`Simulation Speed set to ${speed}x`, 'INFO');
+  };
+
+  const handleResetMission = () => {
+    if (isDemoRunning) setIsDemoRunning(false);
+    simRef.current.resetSimulation();
+    setSimState({ ...simRef.current.state });
+    setUavPos({ ...simRef.current.uavPosition });
+    addEventLog('MISSION RESET: Aircraft returned to Base runway. State cleared.', 'INFO');
   };
 
   const handleChangeControl = <K extends keyof SimulationState['controls']>(key: K, value: SimulationState['controls'][K]) => {
@@ -161,7 +222,7 @@ export const App: React.FC = () => {
 
   const handleClearFault = () => {
     simRef.current.clearFault();
-    addEventLog('Fault Cleared. System restored to NORMAL.', 'INFO');
+    addEventLog('Fault Cleared. System restored to NORMAL equilibrium.', 'INFO');
   };
 
   const handleStartDemo = () => {
@@ -169,10 +230,10 @@ export const App: React.FC = () => {
     setDemoStep(1);
     setDemoStepRemaining(8);
     simRef.current.setEngineOn(true);
-    simRef.current.setControl('throttle', 70);
-    simRef.current.setControl('engineLoad', 70);
+    simRef.current.setControl('throttle', 40);
+    simRef.current.setControl('engineLoad', 50);
     simRef.current.clearFault();
-    addEventLog('Demo Scenario Started: Stage 1 (Nominal Flight)', 'INFO');
+    addEventLog('Demo Scenario Started: Stage 1 — Engine Startup & Systems Check', 'INFO');
   };
 
   const handleStopDemo = () => {
@@ -197,8 +258,16 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] flex flex-col font-sans">
-      {/* Top Header */}
-      <Header telemetryStatus={telemetryStatus} engineOn={simState.engineOn} />
+      {/* Top Header with Simulation Speed, Pause & Notices */}
+      <Header 
+        telemetryStatus={telemetryStatus} 
+        engineOn={simState.engineOn}
+        isPaused={simState.isPaused}
+        speedMultiplier={simState.speedMultiplier}
+        onTogglePause={handleTogglePause}
+        onChangeSpeed={handleChangeSpeed}
+        onResetMission={handleResetMission}
+      />
 
       {/* Main Container: Sidebar + Dashboard Grid */}
       <div className="flex-1 flex overflow-hidden">
@@ -215,6 +284,7 @@ export const App: React.FC = () => {
                 uavPosition={uavPos}
                 flightPhase={simState.flightPhase}
                 engineOn={simState.engineOn}
+                flight={simState.flight}
               />
             </div>
             <div className="col-span-12 lg:col-span-5">
@@ -228,11 +298,23 @@ export const App: React.FC = () => {
             </div>
           </div>
 
+          {/* Collapsible Flight Model Debug Panel */}
+          <FlightDebugPanel
+            flight={simState.flight}
+            enginePowerHp={simState.engine.powerHp}
+            efficiencyLossRatio={simState.engine.efficiencyLossRatio || 0}
+            speedMultiplier={simState.speedMultiplier}
+            simTimeSeconds={simState.simTimeSeconds}
+            navigationMode={simState.controls.navigationMode}
+            engineOn={simState.engineOn}
+          />
+
           {/* Row 2: Flight Controls + Fault Simulation + Real-time Graphs (3 Cards) */}
           <div className="grid grid-cols-12 gap-3 min-h-[200px]">
             <div className="col-span-12 md:col-span-4">
               <FlightControls
                 controls={simState.controls}
+                flight={simState.flight}
                 onChangeControl={handleChangeControl}
                 engineOn={simState.engineOn}
               />
@@ -249,6 +331,7 @@ export const App: React.FC = () => {
               <RealtimeGraphs
                 sensors={simState.sensors}
                 engineOn={simState.engineOn}
+                airspeed={simState.flight.airspeed}
               />
             </div>
           </div>
@@ -291,7 +374,7 @@ export const App: React.FC = () => {
         apiEndpoint={telemetryStatus.endpoint}
         onUpdateEndpoint={(url) => telemetryRef.current.setEndpoint(url)}
         speedMultiplier={simState.speedMultiplier}
-        onUpdateSpeed={(speed) => { simRef.current.state.speedMultiplier = speed; }}
+        onUpdateSpeed={(speed) => { simRef.current.setSpeedMultiplier(speed); }}
         sensorNoiseEnabled={simState.sensorNoiseEnabled}
         onToggleNoise={(enabled) => { simRef.current.state.sensorNoiseEnabled = enabled; }}
       />

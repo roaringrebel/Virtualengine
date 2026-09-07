@@ -60,7 +60,8 @@ export class Rotax912EngineModel {
         fuelFlow: 0,
         fuelPressure: 0,
         vibration: 0,
-        status: 'OFF'
+        status: 'OFF',
+        efficiencyLossRatio: 0
       };
     }
 
@@ -81,19 +82,21 @@ export class Rotax912EngineModel {
     let baseTargetRpm = Rotax912EngineModel.IDLE_RPM + 
       throttleNorm * (Rotax912EngineModel.MAX_TAKEOFF_RPM - Rotax912EngineModel.IDLE_RPM) * availablePowerRatio - loadPenalty;
 
-    // 3. Fault Specific Biases
+    // 3. Fault Specific Biases & Efficiency Derating
     let faultRpmBias = 0;
     let faultVibrationBias = 0;
     let faultFuelFlowBias = 0;
     let faultFuelPressureBias = 0;
+    let efficiencyLossRatio = 0.0;
     const sevMultiplier = fault.severity === 'LOW' ? 0.5 : fault.severity === 'HIGH' ? 1.5 : 1.0;
 
     switch (fault.activeFault) {
       case 'EXCESSIVE_VIBRATION': {
-        // High vibration + slight RPM drag
+        // High vibration + mechanical friction drag
         const progress = Math.min(1.0, fault.elapsedSeconds / 3.0);
         faultVibrationBias = (4.8 * sevMultiplier * progress) + Math.sin(simTime * 22.0) * 0.8;
-        faultRpmBias = Math.sin(simTime * 14.0) * 60 * sevMultiplier;
+        faultRpmBias = -Math.abs(Math.sin(simTime * 14.0) * 80 * sevMultiplier * progress) - (120 * sevMultiplier * progress);
+        efficiencyLossRatio = 0.18 * sevMultiplier * progress;
         break;
       }
       case 'RPM_INSTABILITY': {
@@ -102,20 +105,44 @@ export class Rotax912EngineModel {
         faultRpmBias = hunting;
         faultVibrationBias = (Math.abs(hunting) / 120) * 1.2;
         faultFuelFlowBias = (hunting / 400) * 2.5;
+        efficiencyLossRatio = 0.12 * sevMultiplier;
         break;
       }
       case 'FUEL_PRESSURE_DROP': {
-        // Fuel pump failure
+        // Fuel pump failure: lean fuel starvation and significant power drop
         const progress = Math.min(1.0, fault.elapsedSeconds / 4.0);
         faultFuelPressureBias = -1.8 * sevMultiplier * progress;
-        faultRpmBias = -Math.abs(Math.sin(simTime * 8.0) * 220 * sevMultiplier * progress);
+        faultRpmBias = -Math.abs(Math.sin(simTime * 8.0) * 220 * sevMultiplier * progress) - (450 * sevMultiplier * progress);
         faultVibrationBias = 1.6 * sevMultiplier * progress;
+        efficiencyLossRatio = 0.32 * sevMultiplier * progress;
         break;
       }
       case 'OVERHEATING': {
-        // Power sag due to thermal expansion and detonation margin
+        // Power sag due to thermal expansion, friction, and detonation margin
         const progress = Math.min(1.0, fault.elapsedSeconds / 6.0);
-        faultRpmBias = -250 * sevMultiplier * progress;
+        faultRpmBias = -380 * sevMultiplier * progress;
+        faultVibrationBias = 1.4 * sevMultiplier * progress;
+        efficiencyLossRatio = 0.28 * sevMultiplier * progress;
+        break;
+      }
+      case 'LOW_OIL_PRESSURE': {
+        // Bearing hydrodynamic boundary breakdown -> high friction
+        const progress = Math.min(1.0, fault.elapsedSeconds / 4.0);
+        faultRpmBias = -220 * sevMultiplier * progress;
+        faultVibrationBias = 2.1 * sevMultiplier * progress;
+        efficiencyLossRatio = 0.20 * sevMultiplier * progress;
+        break;
+      }
+      case 'COOLING_PROBLEM': {
+        const progress = Math.min(1.0, fault.elapsedSeconds / 5.0);
+        faultRpmBias = -180 * sevMultiplier * progress;
+        efficiencyLossRatio = 0.15 * sevMultiplier * progress;
+        break;
+      }
+      case 'HIGH_CHT': {
+        const progress = Math.min(1.0, fault.elapsedSeconds / 4.0);
+        faultRpmBias = -150 * sevMultiplier * progress;
+        efficiencyLossRatio = 0.12 * sevMultiplier * progress;
         break;
       }
       case 'NORMAL':
@@ -136,10 +163,10 @@ export class Rotax912EngineModel {
 
     // 4. Power and Torque Calculations
     // Torque curve modeled for Rotax 912 ULS (Max torque ~128 Nm at 5,100 RPM)
-    const normalizedRpm = this.currentRpm / 5800;
     const peakTorqueRpm = 5100;
     const torqueShape = 1.0 - Math.pow((this.currentRpm - peakTorqueRpm) / 4500, 2);
-    const availableTorque = Math.max(20, 128 * Math.max(0.2, torqueShape) * throttleNorm * atmosphere.densityRatio);
+    const healthFactor = Math.max(0.2, 1.0 - efficiencyLossRatio);
+    const availableTorque = Math.max(20, 128 * Math.max(0.2, torqueShape) * throttleNorm * atmosphere.densityRatio * healthFactor);
     
     // Angular velocity: omega = 2 * pi * RPM / 60
     const omega = (2 * Math.PI * this.currentRpm) / 60;
@@ -190,7 +217,8 @@ export class Rotax912EngineModel {
       fuelFlow: Number(this.fuelFlow.toFixed(1)),
       fuelPressure: Number(this.fuelPressure.toFixed(1)),
       vibration: Number(this.vibration.toFixed(1)),
-      status
+      status,
+      efficiencyLossRatio: Number(efficiencyLossRatio.toFixed(2))
     };
   }
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Settings as SettingsIcon, Sliders, Activity } from 'lucide-react';
+import { X, Settings as SettingsIcon, Globe, Laptop } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -35,7 +35,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-bold text-[#1F2937] uppercase">Simulator Settings</h3>
-              <div className="text-[10px] text-[#6B7280]">Telemetry, Speed, and Model Parameters</div>
+              <div className="text-[10px] text-[#6B7280]">Telemetry Sync & Model Parameters</div>
             </div>
           </div>
           <button
@@ -47,17 +47,76 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div className="space-y-4 text-xs">
-          {/* API Endpoint */}
+          {/* API Endpoint / Target Port Configuration */}
           <div>
-            <label className="block text-[11px] font-bold text-[#374151] mb-1">
-              Digital Twin (Website 2) API Endpoint:
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] font-bold text-[#374151]">
+                Target Website / Digital Twin Port or Endpoint:
+              </label>
+              <span className="text-[9px] font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                Engine on :4000
+              </span>
+            </div>
+
+            {/* Quick preset buttons */}
+            <div className="grid grid-cols-4 gap-1.5 mb-2">
+              <button
+                type="button"
+                onClick={() => onUpdateEndpoint('3000')}
+                className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border text-[9.5px] font-mono font-bold transition-all ${
+                  apiEndpoint.includes('3000')
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-2xs'
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Port 3000</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateEndpoint('5174')}
+                className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border text-[9.5px] font-mono font-bold transition-all ${
+                  apiEndpoint.includes('5174')
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-2xs'
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Port 5174</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateEndpoint('5000')}
+                className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border text-[9.5px] font-mono font-bold transition-all ${
+                  apiEndpoint.includes('5000')
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-2xs'
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Port 5000</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateEndpoint('https://sihaimodel.vercel.app/api/telemetry')}
+                className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded-lg border text-[9.5px] font-bold transition-all ${
+                  apiEndpoint.includes('vercel.app')
+                    ? 'bg-blue-50 border-blue-400 text-blue-700 shadow-2xs'
+                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <Globe className="w-2.5 h-2.5 text-blue-600" />
+                <span>Vercel</span>
+              </button>
+            </div>
+
             <input
               type="text"
               value={apiEndpoint}
               onChange={(e) => onUpdateEndpoint(e.target.value)}
               className="w-full font-mono text-xs p-2 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] focus:border-[#F97316] outline-none"
+              placeholder="Enter Port (e.g. 3000) or full URL"
             />
+            <p className="text-[9.5px] text-[#6B7280] mt-1">
+              Type any port number (e.g. <code>3000</code>) or full REST endpoint. Telemetry packets will be POSTed every 1s (1 Hz).
+            </p>
           </div>
 
           {/* Simulation Speed */}
@@ -116,3 +175,4 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     </div>
   );
 };
+

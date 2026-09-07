@@ -17,15 +17,46 @@ export type FaultType =
 export type FaultSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
 
 export interface FlightControlsState {
-  throttle: number;         // 0 - 100%
-  altitude: number;         // ft (0 - 25,000)
-  airspeed: number;         // km/h (0 - 250)
-  heading: number;          // deg (0 - 360)
-  latitude: number;         // °N (32.5000 - 32.5900)
-  longitude: number;        // °E (77.1600 - 77.2700)
+  throttle: number;         // 0 - 100% (target commanded throttle)
+  targetAltitude: number;   // ft (0 - 20,000)
+  targetAirspeed: number;   // km/h (0 - 220)
+  targetHeading: number;    // deg (0 - 360)
   ambientTemp: number;      // °C (-30 - +50)
   engineLoad: number;       // % (0 - 100)
   navigationMode: NavigationMode;
+  windSpeed: number;        // km/h (0 - 80)
+  windDirection: number;    // deg (0 - 360)
+  latitude?: number;        // reference / starting coordinate
+  longitude?: number;       // reference / starting coordinate
+  heading?: number;         // backward compatibility alias
+  altitude?: number;        // backward compatibility alias
+  airspeed?: number;        // backward compatibility alias
+}
+
+export interface FlightState {
+  latitude: number;         // °N
+  longitude: number;        // °E
+  altitude: number;         // ft
+  heading: number;          // deg (0 - 360)
+  airspeed: number;         // km/h (true airspeed)
+  groundSpeed: number;      // km/h (speed over ground)
+  verticalSpeed: number;    // ft/min (climb/descent rate)
+  groundTrack: number;      // deg (actual direction of motion over ground)
+  targetHeading: number;    // deg
+  targetAltitude: number;   // ft
+  targetAirspeed: number;   // km/h
+  throttle: number;         // % (actual effective throttle)
+  engineLoad: number;       // %
+  flightPhase: FlightPhase;
+  windSpeed: number;        // km/h
+  windDirection: number;    // deg (direction wind blows FROM)
+  currentWaypointIndex: number;
+  currentWaypointName: string;
+  distanceToWaypointKm: number;
+  bearingToWaypointDeg: number;
+  missionProgressPercent: number;
+  turnRateDegPerSec: number;
+  bankAngleDeg: number;
 }
 
 export interface AtmosphericState {
@@ -49,6 +80,7 @@ export interface Rotax912State {
   fuelPressure: number;     // bar
   vibration: number;        // mm/s RMS
   status: EngineStatus;
+  efficiencyLossRatio: number; // 0.0 - 0.5 power degradation from faults
 }
 
 export interface ThermalState {
@@ -91,11 +123,13 @@ export interface FaultState {
 
 export interface SimulationState {
   isRunning: boolean;
+  isPaused: boolean;
   engineOn: boolean;
   simTimeSeconds: number;
   speedMultiplier: number;
   sensorNoiseEnabled: boolean;
   flightPhase: FlightPhase;
+  flight: FlightState;
   controls: FlightControlsState;
   atmosphere: AtmosphericState;
   engine: Rotax912State;
@@ -103,3 +137,4 @@ export interface SimulationState {
   sensors: SensorSuiteState;
   fault: FaultState;
 }
+
