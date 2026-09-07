@@ -1,6 +1,6 @@
 export type FlightPhase = 'STANDBY' | 'STARTUP' | 'TAKEOFF' | 'CLIMB' | 'CRUISE' | 'DESCENT' | 'LANDING';
 
-export type EngineStatus = 'OFF' | 'STARTING' | 'NOMINAL' | 'WARNING' | 'CRITICAL';
+export type EngineStatus = 'OFF' | 'STARTING' | 'IDLE' | 'RUNNING' | 'FAULT' | 'STOPPING';
 
 export type NavigationMode = 'MANUAL_PILOT' | 'WAYPOINT_ROUTE';
 
@@ -81,6 +81,7 @@ export interface Rotax912State {
   vibration: number;        // mm/s RMS
   status: EngineStatus;
   efficiencyLossRatio: number; // 0.0 - 0.5 power degradation from faults
+  engineCondition: number;     // 0.0 - 1.0 (1.0 = pristine nominal condition)
 }
 
 export interface ThermalState {

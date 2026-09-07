@@ -22,36 +22,67 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
   const isCritical = Object.values(sensors).some(s => s.status === 'critical');
 
   const getStatusBadge = () => {
-    if (!engineOn) {
-      return (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-100 text-gray-500 border border-gray-200">
-          <span className="w-2 h-2 rounded-full bg-gray-400" />
-          <span>ENGINE OFF (STANDBY)</span>
-        </div>
-      );
+    switch (engine.status) {
+      case 'OFF':
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-100 text-gray-500 border border-gray-200">
+            <span className="w-2 h-2 rounded-full bg-gray-400" />
+            <span>ENGINE OFF (STANDBY)</span>
+          </div>
+        );
+      case 'STARTING':
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-[#F59E0B] border border-amber-200 animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
+            <span>STARTING / IGNITION</span>
+          </div>
+        );
+      case 'IDLE':
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-600 border border-blue-200">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <span>IDLE (~1800 RPM)</span>
+          </div>
+        );
+      case 'STOPPING':
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-gray-200 text-gray-700 border border-gray-300">
+            <span className="w-2 h-2 rounded-full bg-gray-500" />
+            <span>SPOOLING DOWN</span>
+          </div>
+        );
+      case 'FAULT':
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-50 text-[#EF4444] border border-red-200 animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
+            <span>FAULT ACTIVE</span>
+          </div>
+        );
+      case 'RUNNING':
+      default:
+        if (isCritical) {
+          return (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-50 text-[#EF4444] border border-red-200 animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
+              <span>CRITICAL</span>
+            </div>
+          );
+        }
+        if (isAnyWarning) {
+          return (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-[#F59E0B] border border-amber-200">
+              <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
+              <span>WARNING</span>
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-[#10B981] border border-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-[#10B981]" />
+            <span>RUNNING (NOMINAL)</span>
+          </div>
+        );
     }
-    if (isCritical) {
-      return (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-50 text-[#EF4444] border border-red-200 animate-pulse">
-          <span className="w-2 h-2 rounded-full bg-[#EF4444]" />
-          <span>CRITICAL</span>
-        </div>
-      );
-    }
-    if (isAnyWarning) {
-      return (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-[#F59E0B] border border-amber-200">
-          <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-          <span>WARNING</span>
-        </div>
-      );
-    }
-    return (
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-[#10B981] border border-emerald-200">
-        <span className="w-2 h-2 rounded-full bg-[#10B981]" />
-        <span>NOMINAL</span>
-      </div>
-    );
   };
 
   return (
@@ -64,8 +95,8 @@ export const EnginePanel: React.FC<EnginePanelProps> = ({
               <Power className="w-3.5 h-3.5" />
             </div>
             <div>
-              <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase">ENGINE: ROTAX 912</h2>
-              <div className="text-[10px] text-[#6B7280]">Aero-Piston Engine | Trusted. Reliable. Proven.</div>
+              <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase">ENGINE: ROTAX 912 ULS</h2>
+              <div className="text-[10px] text-[#6B7280]">REDUCED-ORDER SIMULATION MODEL</div>
             </div>
           </div>
 

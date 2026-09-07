@@ -1,20 +1,21 @@
 import { FlightControlsState, FlightPhase, FlightState, NavigationMode } from '../types/simulation';
 import { Waypoint } from '../types/mission';
+import { SIMULATION_CONFIG } from './simulationConfig';
 
 export const MISSION_WAYPOINTS: Waypoint[] = [
-  { id: 'wp1', name: 'WP1 — TAKEOFF / AIRBASE', lat: 32.5280, lon: 77.1850, altitudeFt: 500, targetAirspeedKmh: 105, type: 'TAKEOFF', description: 'Runway departure and initial climb vector' },
-  { id: 'wp2', name: 'WP2 — RIVER CORRIDOR', lat: 32.5420, lon: 77.2050, altitudeFt: 4500, targetAirspeedKmh: 135, type: 'CLIMB', description: 'Climb along the central river valley' },
-  { id: 'wp3', name: 'WP3 — URBAN CENTER', lat: 32.5650, lon: 77.2280, altitudeFt: 8000, targetAirspeedKmh: 155, type: 'SURVEILLANCE', description: 'Active tactical surveillance over city blocks' },
-  { id: 'wp4', name: 'WP4 — NORTH EAST HILLS', lat: 32.5780, lon: 77.2550, altitudeFt: 8000, targetAirspeedKmh: 150, type: 'SURVEILLANCE', description: 'Highland perimeter tactical patrol' },
-  { id: 'wp5', name: 'WP5 — RECOVERY VECTOR', lat: 32.5480, lon: 77.2420, altitudeFt: 3500, targetAirspeedKmh: 125, type: 'RETURN', description: 'Descent to recovery approach corridor' },
-  { id: 'base', name: 'BASE — RUNWAY TERMINAL', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 75, type: 'BASE', description: 'Home airbase runway touchdown point' },
+  { id: 'base', name: 'HOME / AIRBASE — RUNWAY', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 0, type: 'BASE', description: 'Home airbase runway departure & touchdown point' },
+  { id: 'wp1', name: 'WP1 — CLIMB OUT CORRIDOR', lat: 32.5420, lon: 77.2050, altitudeFt: 4500, targetAirspeedKmh: 130, type: 'TAKEOFF', description: 'Departure climb out vector along river corridor' },
+  { id: 'wp2', name: 'WP2 — SECTOR ALPHA RECON', lat: 32.5650, lon: 77.2280, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Highland tactical surveillance sector' },
+  { id: 'wp3', name: 'WP3 — NORTH PERIMETER', lat: 32.5780, lon: 77.2550, altitudeFt: 8000, targetAirspeedKmh: 150, type: 'SURVEILLANCE', description: 'Tactical patrol boundary point' },
+  { id: 'wp4', name: 'WP4 — DESCENT TO APPROACH', lat: 32.5480, lon: 77.2420, altitudeFt: 3500, targetAirspeedKmh: 125, type: 'RETURN', description: 'Descent to recovery approach corridor' },
+  { id: 'base_return', name: 'BASE — RECOVERY TERMINAL', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 75, type: 'BASE', description: 'Home runway terminal recovery' },
 ];
 
 /**
  * Deterministic Physics-Inspired Flight Dynamics & Geospatial Navigation Engine
- * Provides smooth inertia-driven heading, first-order airspeed response,
- * gradual vertical speed altitude climbing/descending, geodetic position propagation,
- * wind vector resolution, smooth low-frequency turbulence, and waypoint autopilot.
+ * Longitudinal aerodynamics: Thrust - Drag = Net Force -> a = F/m -> V(t+dt) = V(t) + a*dt
+ * Geodetic local Earth integration: dLat/dt = V_north / R_earth, dLon/dt = V_east / (R_earth * cos(lat))
+ * Coordinated turn dynamics, continuous vertical speed integration, and waypoint navigation.
  */
 export class FlightDynamicsModel {
   // Core Position & Attitude State
@@ -22,10 +23,10 @@ export class FlightDynamicsModel {
   public longitude: number = 77.2150;
   public altitude: number = 8000;
   public heading: number = 270;
-  public airspeed: number = 145;
-  public groundSpeed: number = 145;
+  public airspeed: number = 145; // km/h true airspeed
+  public groundSpeed: number = 145; // km/h
   public verticalSpeed: number = 0; // ft/min
-  public groundTrack: number = 270;
+  public groundTrack: number = 270; // deg
   public bankAngleDeg: number = 0;
   public turnRateDegPerSec: number = 0;
 
@@ -37,21 +38,21 @@ export class FlightDynamicsModel {
   public engineLoad: number = 70;
 
   // Environment
-  public windSpeed: number = 12; // km/h
-  public windDirection: number = 240; // deg (wind blowing FROM 240°)
+  public windSpeed: number = SIMULATION_CONFIG.defaultWindSpeedKmh; // km/h
+  public windDirection: number = SIMULATION_CONFIG.defaultWindDirectionDeg; // deg
 
   // Autopilot Waypoints
   public waypoints: Waypoint[] = MISSION_WAYPOINTS;
-  public currentWaypointIndex: number = 2; // WP3 Urban Center by default
+  public currentWaypointIndex: number = 2; // WP2 Sector Alpha by default
   public flightPhase: FlightPhase = 'CRUISE';
   public navigationMode: NavigationMode = 'MANUAL_PILOT';
 
-  // Configurable Flight Constants
-  public maxTurnRateDegPerSec: number = 4.0; // Standard cruise turn rate
-  public maxClimbRateFpm: number = 1200; // ft/min climb limit
-  public maxDescentRateFpm: number = 900; // ft/min descent limit
-  public minFlightAirspeedKmh: number = 70; // Stall boundary
-  public maxFlightAirspeedKmh: number = 215; // Max level speed
+  // Physical Limits from Config
+  public maxTurnRateDegPerSec: number = SIMULATION_CONFIG.maxTurnRateDegPerSec;
+  public maxClimbRateFpm: number = SIMULATION_CONFIG.maxClimbRateFpm;
+  public maxDescentRateFpm: number = SIMULATION_CONFIG.maxDescentRateFpm;
+  public minFlightAirspeedKmh: number = SIMULATION_CONFIG.minFlightAirspeedKmh;
+  public maxFlightAirspeedKmh: number = SIMULATION_CONFIG.maxFlightAirspeedKmh;
 
   constructor() {
     this.resetToInitialState();
@@ -75,8 +76,8 @@ export class FlightDynamicsModel {
     this.throttle = 70;
     this.engineLoad = 70;
 
-    this.windSpeed = 12;
-    this.windDirection = 240;
+    this.windSpeed = SIMULATION_CONFIG.defaultWindSpeedKmh;
+    this.windDirection = SIMULATION_CONFIG.defaultWindDirectionDeg;
     this.currentWaypointIndex = 0;
     this.flightPhase = 'STANDBY';
     this.navigationMode = 'MANUAL_PILOT';
@@ -84,16 +85,13 @@ export class FlightDynamicsModel {
 
   /**
    * Main Physics Update Step
-   * @param dt Timestep in seconds (e.g. 0.033 to 0.1s)
-   * @param engineOn Engine master switch
-   * @param enginePowerHp Available power from Rotax 912 engine model (accounting for density & faults)
-   * @param simTime Total elapsed simulation seconds
    */
   public update(
     dt: number,
     engineOn: boolean,
     enginePowerHp: number,
-    simTime: number
+    simTime: number,
+    airDensityKgM3: number = SIMULATION_CONFIG.seaLevelAirDensityKgM3
   ): FlightState {
     // 1. Waypoint Autopilot Logic (if active)
     let distToWpKm = 0;
@@ -115,29 +113,23 @@ export class FlightDynamicsModel {
       this.targetAirspeed = currentWp.targetAirspeedKmh;
 
       // Waypoint arrival detection
-      if (distToWpKm < 0.35) {
+      if (distToWpKm < SIMULATION_CONFIG.waypointArrivalRadiusKm) {
         this.currentWaypointIndex = (this.currentWaypointIndex + 1) % this.waypoints.length;
       }
     }
 
-    // 2. Smooth Heading Dynamics with Inertia & 0°/360° Wraparound
-    if (engineOn && this.airspeed > 20) {
-      // Calculate shortest angular distance (-180 to +180)
+    // 2. Smooth Heading Dynamics with Inertia & Shortest Angular Arc Wraparound
+    if (engineOn && this.airspeed > 15) {
       let headingDiff = ((this.targetHeading - this.heading + 540) % 360) - 180;
-      
-      // Calculate desired turn rate toward target
       const turnAgility = Math.min(1.0, this.airspeed / 80.0);
       const effectiveMaxTurnRate = this.maxTurnRateDegPerSec * turnAgility;
-      const desiredTurnRate = Math.sign(headingDiff) * Math.min(effectiveMaxTurnRate, Math.abs(headingDiff) * 1.5);
+      const desiredTurnRate = Math.sign(headingDiff) * Math.min(effectiveMaxTurnRate, Math.abs(headingDiff) * 1.6);
 
-      // Turn rate lag / angular inertia
       const turnTau = 0.5; // seconds
       this.turnRateDegPerSec += (desiredTurnRate - this.turnRateDegPerSec) * (1.0 - Math.exp(-dt / turnTau));
-      
-      // Integrate heading
       this.heading = (this.heading + this.turnRateDegPerSec * dt + 360) % 360;
 
-      // Dynamic banking angle in coordinated turn
+      // Banking angle in coordinated turn
       const targetBank = -this.turnRateDegPerSec * 4.2;
       this.bankAngleDeg += (targetBank - this.bankAngleDeg) * Math.min(1.0, dt * 5.0);
     } else {
@@ -145,37 +137,47 @@ export class FlightDynamicsModel {
       this.bankAngleDeg = 0;
     }
 
-    // 3. Smooth Airspeed Dynamics (Coupled with Engine Power & Throttle)
+    // 3. Longitudinal Flight Dynamics (Thrust vs Aerodynamic Drag Force Balance)
     if (!engineOn) {
-      // Coast down when engine is stopped
-      this.airspeed = Math.max(0, this.airspeed - 25.0 * dt);
+      // Aerodynamic deceleration when engine is OFF
+      this.airspeed = Math.max(0, this.airspeed - 22.0 * dt);
     } else {
-      // Available engine power ratio (100 hp nominal)
-      const powerRatio = Math.max(0.15, Math.min(1.15, enginePowerHp / 100.0));
+      const vMs = Math.max(0.1, (this.airspeed * 1000.0) / 3600.0);
+      const powerWatts = enginePowerHp * 745.7;
+
+      // Propeller thrust: T = (P * eta) / V (with low-speed thrust limit)
+      const effectiveSpeedMs = Math.max(vMs, 14.0);
+      const thrustNewtons = (powerWatts * SIMULATION_CONFIG.propulsiveEfficiency) / effectiveSpeedMs;
+
+      // Aerodynamic drag: D = 0.5 * rho * V^2 * Cd * S + D_induced
+      const dynamicPressure = 0.5 * airDensityKgM3 * vMs * vMs;
+      const parasiteDragNewtons = dynamicPressure * SIMULATION_CONFIG.zeroLiftDragCoeff * SIMULATION_CONFIG.referenceAreaM2;
+      const inducedDragNewtons = Math.min(400, (SIMULATION_CONFIG.aircraftMassKg * 9.81 * 0.08) / Math.max(1.0, vMs / 10.0));
+      const totalDragNewtons = parasiteDragNewtons + inducedDragNewtons;
+
+      // Net longitudinal force & Newton acceleration
+      const netForceNewtons = thrustNewtons - totalDragNewtons;
+      const accelerationMs2 = netForceNewtons / SIMULATION_CONFIG.aircraftMassKg;
+
+      // Target airspeed governor coupling
       const throttleNorm = Math.max(0, Math.min(100, this.throttle)) / 100.0;
+      const targetEquilibriumKmh = 60.0 + (throttleNorm * 145.0 * Math.max(0.2, enginePowerHp / 95.0));
+      const commandedTargetKmh = this.navigationMode === 'MANUAL_PILOT' ? targetEquilibriumKmh : Math.min(this.targetAirspeed, targetEquilibriumKmh + 10.0);
 
-      // Thrust target speed based on throttle and available power
-      const thrustAirspeed = 65.0 + (throttleNorm * 135.0 * powerRatio);
-      
-      let commandedSpeed = this.targetAirspeed;
-      if (this.navigationMode === 'MANUAL_PILOT') {
-        commandedSpeed = thrustAirspeed;
-      } else {
-        commandedSpeed = Math.min(this.targetAirspeed, thrustAirspeed + 10.0);
-      }
+      // Integrate acceleration with lag smoothing
+      const accelKmhPerSec = accelerationMs2 * 3.6;
+      const rawNewSpeedKmh = Math.max(0, this.airspeed + accelKmhPerSec * dt);
 
-      // First-order aerodynamic response
-      const speedTau = 2.4; // seconds
+      const speedTau = 2.0; // seconds
       const speedAlpha = 1.0 - Math.exp(-dt / speedTau);
-      this.airspeed += (commandedSpeed - this.airspeed) * speedAlpha;
+      this.airspeed += (commandedTargetKmh - this.airspeed) * speedAlpha * 0.4 + (rawNewSpeedKmh - this.airspeed) * 0.6;
       this.airspeed = Math.max(0, Math.min(this.maxFlightAirspeedKmh, this.airspeed));
     }
 
     // 4. Smooth Altitude & Vertical Speed Dynamics
     if (!engineOn) {
       if (this.altitude > 0) {
-        // Glide descent without power
-        this.verticalSpeed += (-600 - this.verticalSpeed) * Math.min(1.0, dt * 2.0);
+        this.verticalSpeed += (-500 - this.verticalSpeed) * Math.min(1.0, dt * 2.0);
         this.altitude = Math.max(0, this.altitude + (this.verticalSpeed / 60.0) * dt);
       } else {
         this.verticalSpeed = 0;
@@ -183,39 +185,34 @@ export class FlightDynamicsModel {
       }
     } else {
       const altDiff = this.targetAltitude - this.altitude;
-      const powerRatio = Math.max(0.4, Math.min(1.2, enginePowerHp / 70.0));
+      const powerRatio = Math.max(0.35, Math.min(1.2, enginePowerHp / 70.0));
 
       let desiredVzFpm = 0;
       if (altDiff > 10) {
-        // Climb: bounded by maximum climb rate (approx 5-7 m/s -> 1000-1400 ft/min)
         desiredVzFpm = Math.min(this.maxClimbRateFpm * powerRatio, Math.max(250, altDiff * 0.8));
       } else if (altDiff < -10) {
-        // Descent: standard rate
         desiredVzFpm = Math.max(-this.maxDescentRateFpm, Math.min(-250, altDiff * 0.8));
       } else {
         desiredVzFpm = 0;
       }
 
-      // First-order vertical speed lag
       const vzTau = 0.8; // seconds
       this.verticalSpeed += (desiredVzFpm - this.verticalSpeed) * (1.0 - Math.exp(-dt / vzTau));
       this.altitude = Math.max(0, this.altitude + (this.verticalSpeed / 60.0) * dt);
     }
 
     // 5. Environmental Wind & Ground Velocity Vector Calculation
-    // Air velocity vector
     const headingRad = (this.heading * Math.PI) / 180.0;
     const airSpeedMs = (this.airspeed * 1000.0) / 3600.0;
     const airNorthMs = airSpeedMs * Math.cos(headingRad);
     const airEastMs = airSpeedMs * Math.sin(headingRad);
 
-    // Wind vector (meteorological: wind direction is where wind comes FROM)
+    // Wind vector (wind blowing FROM windDirection)
     const windToRad = (((this.windDirection + 180) % 360) * Math.PI) / 180.0;
     const windSpeedMs = (this.windSpeed * 1000.0) / 3600.0;
     const windNorthMs = windSpeedMs * Math.cos(windToRad);
     const windEastMs = windSpeedMs * Math.sin(windToRad);
 
-    // Ground velocity vector = Air velocity + Wind velocity
     const groundNorthMs = airNorthMs + (engineOn ? windNorthMs : 0);
     const groundEastMs = airEastMs + (engineOn ? windEastMs : 0);
     const groundSpeedMs = Math.sqrt(groundNorthMs * groundNorthMs + groundEastMs * groundEastMs);
@@ -238,7 +235,7 @@ export class FlightDynamicsModel {
       turbSpeed = Math.sin(simTime * 0.35) * 1.2;
     }
 
-    // 7. Geodetic Coordinate Propagation (Local Earth Approximation)
+    // 7. Geodetic Coordinate Propagation (Local Earth Equations)
     if (engineOn && this.groundSpeed > 1.0) {
       const distanceMovedMeters = groundSpeedMs * dt;
       const effectiveHeadingRad = ((this.groundTrack + turbHeading) * Math.PI) / 180.0;
@@ -250,7 +247,6 @@ export class FlightDynamicsModel {
       this.latitude += deltaLat;
       this.longitude += deltaLon;
 
-      // Soft operational boundary wrapping to keep UAV in tactical sector
       if (this.latitude > 32.610) this.latitude = 32.490;
       if (this.latitude < 32.490) this.latitude = 32.610;
       if (this.longitude > 77.290) this.longitude = 77.140;
@@ -301,7 +297,7 @@ export class FlightDynamicsModel {
 
     if (this.throttle < 35 && this.altitude < 150 && this.airspeed < 50) {
       this.flightPhase = 'STARTUP';
-    } else if (this.throttle >= 80 && this.altitude < 1200 && this.verticalSpeed > 200) {
+    } else if (this.throttle >= 75 && this.altitude < 1200 && this.verticalSpeed > 150) {
       this.flightPhase = 'TAKEOFF';
     } else if (this.verticalSpeed >= 180 && this.altitude < this.targetAltitude - 150) {
       this.flightPhase = 'CLIMB';

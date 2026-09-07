@@ -202,6 +202,7 @@ export class SimulationEngine {
     this.state.simTimeSeconds = 0;
 
     this.flightModel.resetToInitialState();
+    this.engineModel.reset();
 
     this.state.controls = {
       throttle: 70,
@@ -247,6 +248,14 @@ export class SimulationEngine {
     };
 
     this.clearFault();
+
+    this.thermalModel.cht = this.state.controls.ambientTemp;
+    this.thermalModel.egt = this.state.controls.ambientTemp;
+    this.thermalModel.oilTemperature = this.state.controls.ambientTemp;
+    this.thermalModel.oilPressure = 0;
+    this.state.engine = this.engineModel.update(0.1, false, this.state.controls, this.state.atmosphere, this.state.fault, 0);
+    this.state.thermal = this.thermalModel.update(0.1, this.state.engine, this.state.controls, this.state.atmosphere, this.state.fault);
+    this.state.sensors = this.sensorModel.processReadings(this.state.engine, this.state.thermal, true, 0);
 
     this.uavPosition = {
       lat: 32.5450,
@@ -332,7 +341,8 @@ export class SimulationEngine {
       effectiveDt,
       this.state.engineOn,
       this.state.engine.powerHp,
-      this.state.simTimeSeconds
+      this.state.simTimeSeconds,
+      this.state.atmosphere.density
     );
 
     this.state.flightPhase = this.state.flight.flightPhase;
@@ -390,6 +400,8 @@ export class SimulationEngine {
       fuel_flow: Number(this.state.engine.fuelFlow.toFixed(2)),
       fuel_pressure: Number(this.state.engine.fuelPressure.toFixed(2)),
       map: Number(this.state.engine.manifoldPressure.toFixed(2)),
+      engine_condition: Number(this.state.engine.engineCondition.toFixed(2)),
+      engine_status: this.state.engine.status,
 
       // Flight Dynamics & Navigation
       latitude: this.state.flight.latitude,

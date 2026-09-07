@@ -227,9 +227,9 @@ export const FlightDebugPanel: React.FC<FlightDebugPanelProps> = ({
                 <strong className="text-orange-300">{enginePowerHp.toFixed(1)} hp</strong>
               </div>
               <div className="flex justify-between text-slate-300">
-                <span>Power Derating (Fault):</span>
+                <span>Engine Health / Derate:</span>
                 <strong className={efficiencyLossRatio > 0 ? 'text-red-400' : 'text-emerald-400'}>
-                  {(efficiencyLossRatio * 100).toFixed(0)}% loss
+                  {((1 - efficiencyLossRatio) * 100).toFixed(0)}% ({(efficiencyLossRatio * 100).toFixed(0)}% loss)
                 </strong>
               </div>
               <div className="flex justify-between text-slate-300">
@@ -237,6 +237,17 @@ export const FlightDebugPanel: React.FC<FlightDebugPanelProps> = ({
                 <strong className="text-cyan-300">{formatTime(simTimeSeconds)} ({speedMultiplier}x)</strong>
               </div>
             </div>
+          </div>
+
+          {/* Model Basis Engineering Note */}
+          <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 text-[9.5px] text-slate-400 space-y-1">
+            <div className="text-orange-400 font-bold uppercase tracking-wide">MODEL BASIS & ENGINEERING ASSUMPTIONS</div>
+            <p className="leading-relaxed text-slate-300">
+              This prototype uses a reduced-order physics model combining simplified UAV flight dynamics, atmospheric relationships, propulsion relationships and engine thermal/sensor models.
+            </p>
+            <p className="leading-relaxed text-slate-400">
+              Simulation parameters are prototype assumptions and should be calibrated using measured UAV/engine data for production deployment.
+            </p>
           </div>
 
           <div className="text-[8.5px] text-slate-500 text-right pt-1 border-t border-slate-800">

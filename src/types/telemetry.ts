@@ -19,6 +19,8 @@ export interface TelemetryPacket {
   fuel_flow: number; // Fuel Flow (L/h)
   fuel_pressure: number; // Fuel Pressure (bar)
   map: number; // Manifold Absolute Pressure (inHg)
+  engine_condition?: number; // 0.0 - 1.0 internal health state
+  engine_status?: string; // "OFF" | "STARTING" | "IDLE" | "RUNNING" | "FAULT" | "STOPPING"
 
   // Flight Dynamics & Navigation Telemetry
   latitude: number; // °N (geodesic position)
