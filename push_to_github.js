@@ -17,14 +17,14 @@ rl.question('Please enter your GitHub Personal Access Token (PAT): ', async (tok
     process.exit(1);
   }
 
-  console.log('\nPushing branch master to https://github.com/roaringrebel/Virtualengine.git ...');
+  console.log('\nPushing branch main to https://github.com/roaringrebel/Virtualengine.git ...');
   try {
     const pushResult = await git.push({
       fs,
       http,
       dir: path,
       remote: 'origin',
-      ref: 'master',
+      ref: 'main',
       onAuth: () => ({ username: trimmedToken })
     });
 
