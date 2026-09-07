@@ -112,6 +112,18 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  const completionLoggedRef = useRef(false);
+
+  // Monitor Destination Reached / Mission Completed
+  useEffect(() => {
+    if (simState.isCompleted && !completionLoggedRef.current) {
+      completionLoggedRef.current = true;
+      addEventLog(`Destination Reached: ${currentDestination.name}. Mission Completed Successfully!`, 'MISSION');
+    } else if (!simState.isCompleted) {
+      completionLoggedRef.current = false;
+    }
+  }, [simState.isCompleted, currentDestination.name]);
+
   // 12-Stage Deterministic SIH Demo Sequence Orchestrator
   useEffect(() => {
     if (!isDemoRunning) return;
@@ -287,6 +299,7 @@ export const App: React.FC = () => {
         telemetryStatus={telemetryStatus} 
         engineOn={simState.engineOn}
         isPaused={simState.isPaused}
+        isCompleted={simState.isCompleted}
         speedMultiplier={simState.speedMultiplier}
         onTogglePause={handleTogglePause}
         onChangeSpeed={handleChangeSpeed}
@@ -342,10 +355,10 @@ export const App: React.FC = () => {
           )}
 
           {/* ============================================================== */}
-          {/* 2. WORKSPACE: 3D VIEW (GEOGRAPHIC FLIGHT VISUALIZATION & MAP)   */}
+          {/* 2. WORKSPACE: MAP (GEOGRAPHIC FLIGHT MAP & TRACKING)           */}
           {/* ============================================================== */}
-          {activeTab === '3d' && (
-            <div className="w-full h-[calc(100vh-80px)] min-h-[620px]">
+          {activeTab === 'map' && (
+            <div className="w-full h-[calc(100vh-125px)] min-h-[580px]">
               <MissionMap
                 uavPosition={uavPos}
                 flightPhase={simState.flightPhase}

@@ -6,6 +6,7 @@ interface HeaderProps {
   telemetryStatus: TelemetryClientStatus;
   engineOn: boolean;
   isPaused: boolean;
+  isCompleted?: boolean;
   speedMultiplier: number;
   onTogglePause: () => void;
   onChangeSpeed: (speed: number) => void;
@@ -16,6 +17,7 @@ export const Header: React.FC<HeaderProps> = ({
   telemetryStatus, 
   engineOn,
   isPaused,
+  isCompleted = false,
   speedMultiplier,
   onTogglePause,
   onChangeSpeed,
@@ -38,8 +40,8 @@ export const Header: React.FC<HeaderProps> = ({
   const isConnected = telemetryStatus.status === 'CONNECTED';
   const isStreaming = telemetryStatus.isStreaming;
 
-  const simStatusText = isPaused ? 'PAUSED' : engineOn ? 'ACTIVE' : 'READY';
-  const telStatusText = isStreaming ? 'LIVE' : 'OFFLINE';
+  const simStatusText = isCompleted ? 'COMPLETED' : isPaused ? 'PAUSED' : engineOn ? 'ACTIVE' : 'READY';
+  const telStatusText = isCompleted ? 'STOPPED' : isStreaming ? 'LIVE' : 'OFFLINE';
 
   return (
     <header className="bg-white border-b border-[#E5E7EB] px-4 py-2 flex flex-col gap-1.5 shadow-xs select-none">

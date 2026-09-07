@@ -57,6 +57,7 @@ export interface FlightState {
   missionProgressPercent: number;
   turnRateDegPerSec: number;
   bankAngleDeg: number;
+  isCompleted?: boolean;
 }
 
 export interface AtmosphericState {
@@ -144,11 +145,15 @@ export interface MissionReliabilityState {
   terrainElevationFt: number;       // ft MSL
   aglAltitudeFt: number;            // ft AGL (Altitude - Terrain)
   routeDeviationKm: number;         // cross-track deviation (km)
+  isCompleted?: boolean;
+  missionStatus?: 'STANDBY' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
 }
 
 export interface SimulationState {
   isRunning: boolean;
   isPaused: boolean;
+  isCompleted: boolean;
+  missionStatus: 'STANDBY' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
   engineOn: boolean;
   simTimeSeconds: number;
   speedMultiplier: number;

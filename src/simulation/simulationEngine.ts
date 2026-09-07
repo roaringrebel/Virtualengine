@@ -100,6 +100,8 @@ export class SimulationEngine {
     this.state = {
       isRunning: true,
       isPaused: false,
+      isCompleted: false,
+      missionStatus: 'STANDBY',
       engineOn: false, // Engine OFF initially
       simTimeSeconds: 0,
       speedMultiplier: 1.0,
@@ -243,6 +245,8 @@ export class SimulationEngine {
 
     this.setEngineOn(false);
     this.state.isPaused = false;
+    this.state.isCompleted = false;
+    this.state.missionStatus = 'STANDBY';
     this.state.simTimeSeconds = 0;
 
     this.flightModel.resetToInitialState();
@@ -328,7 +332,7 @@ export class SimulationEngine {
    * Main Physics Tick (30Hz - 60Hz)
    */
   public update(dtSeconds: number): void {
-    if (this.state.isPaused) return;
+    if (this.state.isPaused || this.state.isCompleted) return;
 
     const effectiveDt = dtSeconds * this.state.speedMultiplier;
     this.state.simTimeSeconds += effectiveDt;
@@ -400,7 +404,14 @@ export class SimulationEngine {
       this.state.atmosphere.density
     );
 
-    this.state.flightPhase = this.state.flight.flightPhase;
+    if (this.flightModel.isCompleted || this.state.flight.isCompleted) {
+      this.state.isCompleted = true;
+      this.state.missionStatus = 'COMPLETED';
+      this.state.flightPhase = 'LANDING';
+    } else {
+      this.state.flightPhase = this.state.flight.flightPhase;
+      this.state.missionStatus = this.state.engineOn ? (this.state.isPaused ? 'PAUSED' : 'IN_PROGRESS') : 'STANDBY';
+    }
 
     // 6. Mission Reliability & Health Assessment
     this.state.reliability = this.reliabilityModel.calculate(
@@ -412,6 +423,8 @@ export class SimulationEngine {
       this.state.simTimeSeconds,
       this.state.engineOn
     );
+    this.state.reliability.isCompleted = this.state.isCompleted;
+    this.state.reliability.missionStatus = this.state.missionStatus;
 
     // 7. Synchronize UAV Position for Map & UI
     this.uavPosition = {
@@ -452,7 +465,7 @@ export class SimulationEngine {
       sequence_number: this.sequenceNumber,
       aircraft: 'MALE_UAV',
       engine: 'ROTAX_912_ULS',
-      flight_phase: this.state.flightPhase,
+      flight_phase: this.state.isCompleted ? 'COMPLETED' : this.state.flightPhase,
       engine_on: this.state.engineOn,
 
       // Rotax 912 Sensors

@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Compass, 
-  Box, 
+  Map as MapIcon, 
   Sliders, 
   Gauge, 
   Radio, 
@@ -12,7 +12,7 @@ import {
 
 export type SidebarTab = 
   | 'mission' 
-  | '3d'
+  | 'map'
   | 'flight' 
   | 'engine' 
   | 'telemetry' 
@@ -27,7 +27,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
   const navItems = [
     { id: 'mission' as SidebarTab, label: 'MISSION', icon: Compass, subtitle: 'Mission Planning & Reliability' },
-    { id: '3d' as SidebarTab, label: '3D VIEW', icon: Box, subtitle: 'Geographic Flight Visualization' },
+    { id: 'map' as SidebarTab, label: 'MAP', icon: MapIcon, subtitle: 'Geographic Flight Tracking' },
     { id: 'flight' as SidebarTab, label: 'FLIGHT', icon: Sliders, subtitle: 'Flight Dynamics & Controls' },
     { id: 'engine' as SidebarTab, label: 'ENGINE', icon: Gauge, subtitle: 'Engine Health & Fault Simulation' },
     { id: 'telemetry' as SidebarTab, label: 'TELEMETRY', icon: Radio, subtitle: 'Live Data & System Integration' },

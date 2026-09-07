@@ -91,6 +91,7 @@ export class FlightDynamicsModel {
   public currentWaypointIndex: number = 0;
   public flightPhase: FlightPhase = 'STANDBY';
   public navigationMode: NavigationMode = 'WAYPOINT_ROUTE';
+  public isCompleted: boolean = false;
 
   // Physical Limits from Config
   public maxTurnRateDegPerSec: number = SIMULATION_CONFIG.maxTurnRateDegPerSec;
@@ -127,12 +128,14 @@ export class FlightDynamicsModel {
     this.currentWaypointIndex = 0;
     this.flightPhase = 'STANDBY';
     this.navigationMode = 'WAYPOINT_ROUTE';
+    this.isCompleted = false;
   }
 
   public setMissionRoute(waypoints: Waypoint[]): void {
     if (waypoints.length > 0) {
       this.waypoints = waypoints;
       this.currentWaypointIndex = 0;
+      this.isCompleted = false;
       this.latitude = waypoints[0].lat;
       this.longitude = waypoints[0].lon;
       if (waypoints.length > 1) {
@@ -153,6 +156,46 @@ export class FlightDynamicsModel {
     simTime: number,
     airDensityKgM3: number = SIMULATION_CONFIG.seaLevelAirDensityKgM3
   ): FlightState {
+    if (this.isCompleted) {
+      const destWp = this.waypoints[this.waypoints.length - 1] || this.waypoints[0];
+      this.latitude = destWp.lat;
+      this.longitude = destWp.lon;
+      this.altitude = destWp.altitudeFt || 0;
+      this.airspeed = 0;
+      this.groundSpeed = 0;
+      this.verticalSpeed = 0;
+      this.turnRateDegPerSec = 0;
+      this.bankAngleDeg = 0;
+      this.flightPhase = 'LANDING';
+
+      return {
+        latitude: Number(this.latitude.toFixed(6)),
+        longitude: Number(this.longitude.toFixed(6)),
+        altitude: Math.round(this.altitude),
+        heading: Math.round(this.heading),
+        airspeed: 0,
+        groundSpeed: 0,
+        verticalSpeed: 0,
+        groundTrack: this.groundTrack,
+        targetHeading: Math.round(this.targetHeading),
+        targetAltitude: Math.round(this.targetAltitude),
+        targetAirspeed: 0,
+        throttle: 0,
+        engineLoad: 0,
+        flightPhase: 'LANDING',
+        windSpeed: this.windSpeed,
+        windDirection: this.windDirection,
+        currentWaypointIndex: this.waypoints.length - 1,
+        currentWaypointName: destWp.name,
+        distanceToWaypointKm: 0,
+        bearingToWaypointDeg: 0,
+        missionProgressPercent: 100,
+        turnRateDegPerSec: 0,
+        bankAngleDeg: 0,
+        isCompleted: true
+      };
+    }
+
     // 1. Waypoint Autopilot Logic
     let distToWpKm = 0;
     let bearingToWpDeg = 0;
@@ -170,8 +213,48 @@ export class FlightDynamicsModel {
         this.targetAirspeed = currentWp.targetAirspeedKmh;
       }
 
-      // Waypoint arrival detection (within 0.8 km)
-      if (distToWpKm < 0.8 && this.currentWaypointIndex < this.waypoints.length - 1) {
+      // Check if destination is reached (final waypoint)
+      if (this.currentWaypointIndex === this.waypoints.length - 1) {
+        if (distToWpKm <= 0.35) { // within 350 meters of destination terminal point
+          this.latitude = currentWp.lat;
+          this.longitude = currentWp.lon;
+          this.altitude = currentWp.altitudeFt || 0;
+          this.airspeed = 0;
+          this.groundSpeed = 0;
+          this.verticalSpeed = 0;
+          this.turnRateDegPerSec = 0;
+          this.bankAngleDeg = 0;
+          this.flightPhase = 'LANDING';
+          this.isCompleted = true;
+
+          return {
+            latitude: Number(this.latitude.toFixed(6)),
+            longitude: Number(this.longitude.toFixed(6)),
+            altitude: Math.round(this.altitude),
+            heading: Math.round(this.heading),
+            airspeed: 0,
+            groundSpeed: 0,
+            verticalSpeed: 0,
+            groundTrack: this.groundTrack,
+            targetHeading: Math.round(this.targetHeading),
+            targetAltitude: Math.round(this.targetAltitude),
+            targetAirspeed: 0,
+            throttle: 0,
+            engineLoad: 0,
+            flightPhase: 'LANDING',
+            windSpeed: this.windSpeed,
+            windDirection: this.windDirection,
+            currentWaypointIndex: this.currentWaypointIndex,
+            currentWaypointName: currentWp.name,
+            distanceToWaypointKm: 0,
+            bearingToWaypointDeg: 0,
+            missionProgressPercent: 100,
+            turnRateDegPerSec: 0,
+            bankAngleDeg: 0,
+            isCompleted: true
+          };
+        }
+      } else if (distToWpKm < 0.8) {
         this.currentWaypointIndex++;
       }
     }
