@@ -1,3 +1,10 @@
+export interface LocationCoord {
+  lat: number;
+  lon: number;
+  name: string;
+  altitudeFt?: number;
+}
+
 export interface Waypoint {
   id: string;
   name: string;
@@ -5,8 +12,35 @@ export interface Waypoint {
   lon: number;
   altitudeFt: number;
   targetAirspeedKmh: number;
-  type: 'TAKEOFF' | 'CLIMB' | 'SURVEILLANCE' | 'RETURN' | 'BASE';
+  type: 'SOURCE' | 'TAKEOFF' | 'CLIMB' | 'CRUISE' | 'SURVEILLANCE' | 'RETURN' | 'DESTINATION' | 'BASE';
   description: string;
+}
+
+export interface MissionPlan {
+  id: string;
+  name: string;
+  source: LocationCoord;
+  destination: LocationCoord;
+  waypoints: Waypoint[];
+  totalDistanceKm: number;
+  initialBearingDeg: number;
+  targetAltitudeFt: number;
+  targetAirspeedKmh: number;
+}
+
+export interface MissionMetrics {
+  sourceName: string;
+  destinationName: string;
+  totalDistanceKm: number;
+  remainingDistanceKm: number;
+  progressPercent: number;
+  currentBearingDeg: number;
+  etaSeconds: number;
+  etaFormatted: string;
+  elapsedFormatted: string;
+  routeDeviationKm: number;
+  currentLeg: string;
+  activeWaypointIndex: number;
 }
 
 export interface MissionEventLog {

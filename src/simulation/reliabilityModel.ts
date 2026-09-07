@@ -1,5 +1,6 @@
 import { FaultState, FlightState, Rotax912State, ThermalState } from '../types/simulation';
 import { Waypoint } from '../types/mission';
+import { haversineDistanceKm } from './geoMath';
 
 export type MissionRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type MissionDecision = 'GO' | 'CAUTION' | 'NO-GO';
@@ -15,9 +16,10 @@ export interface MissionReliabilityState {
   missionMarginHours: number;       // RUL - remaining mission time (hours)
   anomalyScore: number;             // 0.0 - 1.0
   missionProgressPercent: number;   // 0 - 100%
-  distanceRemainingKm: number;      // km
+  totalMissionDistanceKm: number;   // total distance across all route legs (km)
+  distanceRemainingKm: number;      // remaining distance to destination (km)
   timeRemainingSeconds: number;     // seconds
-  timeRemainingFormatted: string;   // mm:ss
+  timeRemainingFormatted: string;   // mm:ss or hh:mm:ss
   missionTimeFormatted: string;     // mm:ss
   terrainElevationFt: number;       // ft MSL
   aglAltitudeFt: number;            // ft AGL (Altitude - Terrain)
@@ -25,20 +27,25 @@ export interface MissionReliabilityState {
 }
 
 /**
- * Calculates simulated terrain elevation (ft MSL) based on local topography of Himachal foothills.
+ * Calculates simulated terrain elevation (ft MSL) based on geographic location.
+ * Provides realistic terrain context (e.g. coastal Andhra plain vs mountain foothills).
  */
 export function getSimulatedTerrainElevation(lat: number, lon: number): number {
-  const dLat = (lat - 32.5450) * 111.32;
-  const dLon = (lon - 77.2150) * 94.12;
-
-  // Continuous smooth undulating topography (3,600 ft to 5,200 ft)
-  const baseElev = 3850;
-  const ridgeEast = Math.max(0, dLon * 120);
-  const ridgeNorth = Math.sin(dLat * 0.45) * 320 + Math.cos(dLon * 0.55) * 240;
-  const valleyVariation = Math.sin(dLat * 0.85 + dLon * 0.6) * 180;
-
-  const elev = Math.round(baseElev + ridgeEast + ridgeNorth + valleyVariation);
-  return Math.max(3500, Math.min(5400, elev));
+  if (lat > 28.0) {
+    // Northern/Himalayan foothills
+    const dLat = (lat - 32.5450) * 111.32;
+    const dLon = (lon - 77.2150) * 94.12;
+    const baseElev = 3850;
+    const ridgeEast = Math.max(0, dLon * 120);
+    const ridgeNorth = Math.sin(dLat * 0.45) * 320 + Math.cos(dLon * 0.55) * 240;
+    const valleyVariation = Math.sin(dLat * 0.85 + dLon * 0.6) * 180;
+    return Math.max(3200, Math.min(6500, Math.round(baseElev + ridgeEast + ridgeNorth + valleyVariation)));
+  } else {
+    // Deccan / Andhra plain / Krishna basin (VIT-AP / Vijayawada)
+    const baseElev = 75; // ft MSL
+    const localHill = Math.sin(lat * 12.0) * 45 + Math.cos(lon * 15.0) * 35;
+    return Math.max(40, Math.min(350, Math.round(baseElev + localHill)));
+  }
 }
 
 /**
@@ -51,12 +58,13 @@ export function calculateRouteDeviationKm(
   currentWpIdx: number
 ): number {
   if (waypoints.length < 2) return 0;
-  const prevIdx = (currentWpIdx - 1 + waypoints.length) % waypoints.length;
+  const prevIdx = Math.max(0, currentWpIdx - 1);
+  const nextIdx = Math.min(waypoints.length - 1, currentWpIdx);
   const p1 = waypoints[prevIdx];
-  const p2 = waypoints[currentWpIdx];
+  const p2 = waypoints[nextIdx];
 
   // Convert geodetic to local Cartesian coordinates (km)
-  const latRef = waypoints[0].lat;
+  const latRef = (p1.lat + p2.lat) / 2;
   const cosLat = Math.cos((latRef * Math.PI) / 180);
   const kx = 111.32 * cosLat;
   const ky = 111.32;
@@ -94,42 +102,43 @@ export class ReliabilityModel {
     simTimeSeconds: number,
     engineOn: boolean
   ): MissionReliabilityState {
+    const activeWaypoints = waypoints && waypoints.length > 0 ? waypoints : [];
+
     // 1. Terrain & Altitude AGL
     const terrainElevFt = getSimulatedTerrainElevation(flight.latitude, flight.longitude);
-    // Display total MSL altitude: base 3,850 ft + relative flight altitude
-    const uavMslAltitudeFt = engineOn ? (3850 + flight.altitude) : terrainElevFt;
+    const uavMslAltitudeFt = engineOn ? (terrainElevFt + flight.altitude) : terrainElevFt;
     const aglFt = Math.max(0, uavMslAltitudeFt - terrainElevFt);
 
     // 2. Route Deviation
     const routeDevKm = calculateRouteDeviationKm(
       flight.latitude,
       flight.longitude,
-      waypoints,
+      activeWaypoints,
       flight.currentWaypointIndex
     );
 
     // 3. Engine State of Health (SOH %)
     let rawSoh = engine.engineCondition * 100;
 
-    // Proportional sensor penalties without double-counting
+    // Proportional sensor penalties based on physics model
     if (engine.vibration > 5.0) {
-      rawSoh -= Math.min(18, (engine.vibration - 5.0) * 2.8);
+      rawSoh -= Math.min(22, (engine.vibration - 5.0) * 3.5);
     }
     if (thermal.cht > 135) {
-      rawSoh -= Math.min(30, (thermal.cht - 135) * 0.55);
+      rawSoh -= Math.min(35, (thermal.cht - 135) * 0.65);
     }
     if (thermal.oilTemperature > 125) {
-      rawSoh -= Math.min(20, (thermal.oilTemperature - 125) * 0.65);
+      rawSoh -= Math.min(25, (thermal.oilTemperature - 125) * 0.75);
     }
     if (engineOn && thermal.oilPressure < 2.0) {
-      rawSoh -= Math.min(30, (2.0 - thermal.oilPressure) * 18);
+      rawSoh -= Math.min(35, (2.0 - thermal.oilPressure) * 20);
     }
     if (fault.activeFault !== 'NORMAL') {
-      const severityMult = fault.severity === 'LOW' ? 6 : fault.severity === 'MEDIUM' ? 14 : 32;
+      const severityMult = fault.severity === 'LOW' ? 8 : fault.severity === 'MEDIUM' ? 18 : 38;
       rawSoh -= severityMult;
     }
 
-    const engineSOH = Math.round(Math.max(15, Math.min(99, rawSoh)));
+    const engineSOH = Math.round(Math.max(12, Math.min(99, rawSoh)));
 
     // 4. Remaining Useful Life (RUL Hours)
     let rulHours = 240.0;
@@ -148,11 +157,11 @@ export class ReliabilityModel {
     let faultRiskPercent = 3;
     if (fault.activeFault !== 'NORMAL') {
       if (fault.severity === 'LOW') faultRiskPercent = 18;
-      else if (fault.severity === 'MEDIUM') faultRiskPercent = 38;
-      else faultRiskPercent = 82;
+      else if (fault.severity === 'MEDIUM') faultRiskPercent = 42;
+      else faultRiskPercent = 88;
     }
-    if (engine.vibration > 6.0) faultRiskPercent = Math.max(faultRiskPercent, 45);
-    if (thermal.cht > 165) faultRiskPercent = Math.max(faultRiskPercent, 80);
+    if (engine.vibration > 6.0) faultRiskPercent = Math.max(faultRiskPercent, 55);
+    if (thermal.cht > 165) faultRiskPercent = Math.max(faultRiskPercent, 85);
 
     // 6. Sensor Anomaly Score (0.0 to 1.0)
     let anomaly = 0.04;
@@ -164,12 +173,41 @@ export class ReliabilityModel {
     }
     const anomalyScore = Number(Math.min(0.98, Math.max(0.02, anomaly)).toFixed(2));
 
-    // 7. Mission Distance & Remaining Time
-    const totalMissionDistKm = 42.0;
-    const progress = Math.max(0, Math.min(100, flight.missionProgressPercent));
-    const distRemainingKm = Number((totalMissionDistKm * (1.0 - progress / 100.0)).toFixed(1));
+    // 7. Dynamic Total Distance and Remaining Distance Calculation from Active Waypoints
+    let totalMissionDistKm = 0;
+    for (let i = 0; i < activeWaypoints.length - 1; i++) {
+      totalMissionDistKm += haversineDistanceKm(
+        activeWaypoints[i].lat,
+        activeWaypoints[i].lon,
+        activeWaypoints[i + 1].lat,
+        activeWaypoints[i + 1].lon
+      );
+    }
+    totalMissionDistKm = Number(Math.max(1.0, totalMissionDistKm).toFixed(2));
 
-    const effectiveSpeedKmh = Math.max(90, flight.groundSpeed > 10 ? flight.groundSpeed : 135);
+    // Distance remaining from current position to next waypoint + subsequent legs
+    let distRemainingKm = 0;
+    if (activeWaypoints.length > 0) {
+      const curIdx = Math.min(flight.currentWaypointIndex, activeWaypoints.length - 1);
+      const nextTargetWp = activeWaypoints[curIdx] || activeWaypoints[activeWaypoints.length - 1];
+      distRemainingKm += haversineDistanceKm(flight.latitude, flight.longitude, nextTargetWp.lat, nextTargetWp.lon);
+
+      for (let j = curIdx; j < activeWaypoints.length - 1; j++) {
+        distRemainingKm += haversineDistanceKm(
+          activeWaypoints[j].lat,
+          activeWaypoints[j].lon,
+          activeWaypoints[j + 1].lat,
+          activeWaypoints[j + 1].lon
+        );
+      }
+    }
+    distRemainingKm = Number(Math.max(0, distRemainingKm).toFixed(2));
+
+    const progress = totalMissionDistKm > 0 
+      ? Math.max(0, Math.min(100, Math.round(((totalMissionDistKm - distRemainingKm) / totalMissionDistKm) * 100)))
+      : flight.missionProgressPercent;
+
+    const effectiveSpeedKmh = Math.max(90, flight.groundSpeed > 10 ? flight.groundSpeed : 140);
     const timeRemainingHours = distRemainingKm / effectiveSpeedKmh;
     const timeRemainingSec = Math.round(timeRemainingHours * 3600);
 
@@ -185,38 +223,50 @@ export class ReliabilityModel {
     const missionMarginHours = Number(Math.max(-5.0, rulHours - timeRemainingHours).toFixed(1));
 
     // 8. Overall Mission Reliability Score (%)
-    let rel = 0.45 * engineSOH + 0.30 * (100 - faultRiskPercent) + 0.15 * Math.min(100, rulHours * 3.0) + 0.10 * (1.0 - anomalyScore) * 100;
+    let rel = 0.40 * engineSOH + 0.30 * (100 - faultRiskPercent) + 0.20 * Math.min(100, rulHours * 2.5) + 0.10 * (1.0 - anomalyScore) * 100;
     
-    // Penalize if mission margin is critically low (< 0.5 hour)
-    if (missionMarginHours < 0.5) {
-      rel = Math.min(rel, 35);
+    // Penalize if mission duration exceeds RUL (Digital Twin Core Logic)
+    if (rulHours < timeRemainingHours) {
+      rel = Math.min(rel, 25);
+    } else if (missionMarginHours < 1.0) {
+      rel = Math.min(rel, 48);
     }
 
-    const reliabilityScore = Math.round(Math.max(12, Math.min(98, rel)));
+    const reliabilityScore = Math.round(Math.max(10, Math.min(99, rel)));
 
     // 9. Mission Risk & Decision (GO / CAUTION / NO-GO)
     let riskLevel: MissionRisk = 'LOW';
     let decision: MissionDecision = 'GO';
-    let decisionReason = 'Mission can safely continue under nominal simulated parameters.';
-
-    if (reliabilityScore >= 80 && fault.activeFault === 'NORMAL' && engineSOH >= 82) {
-      riskLevel = 'LOW';
-      decision = 'GO';
-      decisionReason = 'Nominal aero-propulsion & thermal equilibrium. Full mission capability available.';
-    } else if (reliabilityScore >= 52 && engineSOH >= 45 && fault.severity !== 'HIGH') {
-      riskLevel = faultRiskPercent > 35 ? 'HIGH' : 'MEDIUM';
-      decision = 'CAUTION';
-      decisionReason = 'Engine degradation / abnormal vibration detected. Mission completion possible with active monitoring.';
-    } else {
-      riskLevel = 'CRITICAL';
-      decision = 'NO-GO';
-      decisionReason = 'Predicted engine capability insufficient for remaining mission duration. Immediate recovery/RTB advised.';
-    }
+    let decisionReason = 'Nominal aero-propulsion & thermal equilibrium. Mission within engine capability.';
 
     if (!engineOn) {
       decision = 'GO';
       riskLevel = 'LOW';
-      decisionReason = 'Engine in Standby. Ready for pre-flight startup sequence.';
+      decisionReason = 'Engine in Standby. Ready for pre-flight mission startup sequence.';
+    } else if (rulHours < timeRemainingHours) {
+      riskLevel = 'CRITICAL';
+      decision = 'NO-GO';
+      decisionReason = `Insufficient RUL (${rulHours}h) for mission duration (${timeRemainingHours.toFixed(1)}h). Risk of in-flight failure.`;
+    } else if (fault.activeFault === 'OVERHEATING' || fault.activeFault === 'LOW_OIL_PRESSURE' || (fault.activeFault !== 'NORMAL' && fault.severity === 'HIGH') || engineSOH < 40 || thermal.oilPressure < 1.5) {
+      riskLevel = 'CRITICAL';
+      decision = 'NO-GO';
+      decisionReason = `Critical propulsion anomaly detected (${fault.activeFault}). Immediate abort / RTB advised.`;
+    } else if (reliabilityScore >= 80 && fault.activeFault === 'NORMAL' && engineSOH >= 80) {
+      riskLevel = 'LOW';
+      decision = 'GO';
+      decisionReason = 'Engine parameters healthy, low anomaly score, adequate mission margin.';
+    } else {
+      riskLevel = faultRiskPercent > 35 ? 'HIGH' : 'MEDIUM';
+      decision = 'CAUTION';
+      if (engine.vibration > 5.0) {
+        decisionReason = 'Elevated vibration reduces predicted mission margin. Continuous monitoring recommended.';
+      } else if (thermal.cht > 140) {
+        decisionReason = 'Elevated cylinder head temperature. Restrict throttle to maintain thermal bounds.';
+      } else if (fault.activeFault !== 'NORMAL') {
+        decisionReason = `Minor fault (${fault.activeFault}) active. Mission feasible with heightened vigilance.`;
+      } else {
+        decisionReason = 'Engine degradation detected. Reduced safety margin for extended mission duration.';
+      }
     }
 
     return {
@@ -230,6 +280,7 @@ export class ReliabilityModel {
       missionMarginHours,
       anomalyScore,
       missionProgressPercent: progress,
+      totalMissionDistanceKm: totalMissionDistKm,
       distanceRemainingKm: distRemainingKm,
       timeRemainingSeconds: timeRemainingSec,
       timeRemainingFormatted,
@@ -240,3 +291,4 @@ export class ReliabilityModel {
     };
   }
 }
+

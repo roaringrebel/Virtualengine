@@ -1,38 +1,83 @@
 import { FlightControlsState, FlightPhase, FlightState, NavigationMode } from '../types/simulation';
-import { Waypoint } from '../types/mission';
+import { LocationCoord, Waypoint } from '../types/mission';
 import { SIMULATION_CONFIG } from './simulationConfig';
+import { haversineDistanceKm, initialBearingDeg, REAL_WORLD_MISSION_PRESETS } from './geoMath';
 
-export const MISSION_WAYPOINTS: Waypoint[] = [
-  { id: 'home', name: 'HOME / AIRBASE', lat: 32.5450, lon: 77.2150, altitudeFt: 0, targetAirspeedKmh: 0, type: 'BASE', description: 'Simulated home airfield base' },
-  { id: 'wp1', name: 'WP1 — MOUNTAIN PASS', lat: 32.5650, lon: 77.2500, altitudeFt: 4500, targetAirspeedKmh: 135, type: 'CLIMB', description: 'Initial climb corridor through eastern valley' },
-  { id: 'wp2', name: 'WP2 — NORTH HIGHLANDS', lat: 32.5900, lon: 77.3000, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Highland tactical surveillance sector' },
-  { id: 'wp3', name: 'WP3 — EAST PERIMETER', lat: 32.5700, lon: 77.3500, altitudeFt: 8000, targetAirspeedKmh: 150, type: 'SURVEILLANCE', description: 'Eastern reconnaissance perimeter' },
-  { id: 'wp4', name: 'WP4 — SOUTHERN VECTOR', lat: 32.5300, lon: 77.3200, altitudeFt: 3500, targetAirspeedKmh: 130, type: 'RETURN', description: 'Recovery approach vector to home base' },
-  { id: 'home_rtb', name: 'HOME — RECOVERY', lat: 32.5450, lon: 77.2150, altitudeFt: 0, targetAirspeedKmh: 75, type: 'BASE', description: 'Runway touchdown and recovery' },
+export const DEFAULT_MISSION_WAYPOINTS: Waypoint[] = [
+  {
+    id: 'vitap_source',
+    name: 'VIT-AP University — AIRBASE',
+    lat: 16.4941,
+    lon: 80.4982,
+    altitudeFt: 0,
+    targetAirspeedKmh: 0,
+    type: 'SOURCE',
+    description: 'VIT-AP University runway and airfield'
+  },
+  {
+    id: 'wp1_climb',
+    name: 'WP1 — CLIMB CORRIDOR',
+    lat: 16.5032,
+    lon: 80.5728,
+    altitudeFt: 4500,
+    targetAirspeedKmh: 135,
+    type: 'CLIMB',
+    description: 'Initial ascent vector across Krishna river basin'
+  },
+  {
+    id: 'wp2_cruise',
+    name: 'WP2 — CRUISE SECTOR',
+    lat: 16.5186,
+    lon: 80.6437,
+    altitudeFt: 6500,
+    targetAirspeedKmh: 145,
+    type: 'CRUISE',
+    description: 'Tactical transit corridor over Vijayawada metro'
+  },
+  {
+    id: 'wp3_descent',
+    name: 'WP3 — DESCENT APPROACH',
+    lat: 16.5250,
+    lon: 80.7200,
+    altitudeFt: 3000,
+    targetAirspeedKmh: 125,
+    type: 'RETURN',
+    description: 'Descent sequencing into airport approach sector'
+  },
+  {
+    id: 'vja_dest',
+    name: 'Vijayawada Int Airport — DESTINATION',
+    lat: 16.5304,
+    lon: 80.7968,
+    altitudeFt: 0,
+    targetAirspeedKmh: 75,
+    type: 'DESTINATION',
+    description: 'Runway touchdown and mission destination'
+  }
 ];
+
+export const MISSION_WAYPOINTS = DEFAULT_MISSION_WAYPOINTS;
 
 /**
  * Deterministic Physics-Inspired Flight Dynamics & Geospatial Navigation Engine
- * Longitudinal aerodynamics: Thrust - Drag = Net Force -> a = F/m -> V(t+dt) = V(t) + a*dt
- * Geodetic local Earth integration: dLat/dt = V_north / R_earth, dLon/dt = V_east / (R_earth * cos(lat))
- * Coordinated turn dynamics, continuous vertical speed integration, and waypoint navigation.
+ * Single authoritative source of truth for 2D and 3D flight.
  */
 export class FlightDynamicsModel {
-  // Core Position & Attitude State
-  public latitude: number = 32.5450;
-  public longitude: number = 77.2150;
-  public altitude: number = 8000;
-  public heading: number = 270;
-  public airspeed: number = 145; // km/h true airspeed
-  public groundSpeed: number = 145; // km/h
+  // Core Position & Attitude State (VIT-AP default starting coordinate)
+  public latitude: number = 16.4941;
+  public longitude: number = 80.4982;
+  public altitude: number = 0; // ft MSL above airfield
+  public heading: number = 80;
+  public airspeed: number = 0; // km/h true airspeed
+  public groundSpeed: number = 0; // km/h
   public verticalSpeed: number = 0; // ft/min
-  public groundTrack: number = 270; // deg
+  public groundTrack: number = 80; // deg
   public bankAngleDeg: number = 0;
   public turnRateDegPerSec: number = 0;
 
   // Commanded Targets
-  public targetHeading: number = 270;
-  public targetAltitude: number = 8000;
+  public targetHeading: number = 80;
+  public targetAltitude: number = 6500;
   public targetAirspeed: number = 145;
   public throttle: number = 70;
   public engineLoad: number = 70;
@@ -42,10 +87,10 @@ export class FlightDynamicsModel {
   public windDirection: number = SIMULATION_CONFIG.defaultWindDirectionDeg; // deg
 
   // Autopilot Waypoints
-  public waypoints: Waypoint[] = MISSION_WAYPOINTS;
-  public currentWaypointIndex: number = 2; // WP2 Sector Alpha by default
-  public flightPhase: FlightPhase = 'CRUISE';
-  public navigationMode: NavigationMode = 'MANUAL_PILOT';
+  public waypoints: Waypoint[] = DEFAULT_MISSION_WAYPOINTS;
+  public currentWaypointIndex: number = 0;
+  public flightPhase: FlightPhase = 'STANDBY';
+  public navigationMode: NavigationMode = 'WAYPOINT_ROUTE';
 
   // Physical Limits from Config
   public maxTurnRateDegPerSec: number = SIMULATION_CONFIG.maxTurnRateDegPerSec;
@@ -59,19 +104,20 @@ export class FlightDynamicsModel {
   }
 
   public resetToInitialState(): void {
-    this.latitude = 32.5450;
-    this.longitude = 77.2150;
+    const startWp = this.waypoints[0] || DEFAULT_MISSION_WAYPOINTS[0];
+    this.latitude = startWp.lat;
+    this.longitude = startWp.lon;
     this.altitude = 0;
-    this.heading = 270;
+    this.heading = 80;
     this.airspeed = 0;
     this.groundSpeed = 0;
     this.verticalSpeed = 0;
-    this.groundTrack = 270;
+    this.groundTrack = 80;
     this.bankAngleDeg = 0;
     this.turnRateDegPerSec = 0;
 
-    this.targetHeading = 270;
-    this.targetAltitude = 8000;
+    this.targetHeading = 80;
+    this.targetAltitude = 6500;
     this.targetAirspeed = 145;
     this.throttle = 70;
     this.engineLoad = 70;
@@ -80,11 +126,25 @@ export class FlightDynamicsModel {
     this.windDirection = SIMULATION_CONFIG.defaultWindDirectionDeg;
     this.currentWaypointIndex = 0;
     this.flightPhase = 'STANDBY';
-    this.navigationMode = 'MANUAL_PILOT';
+    this.navigationMode = 'WAYPOINT_ROUTE';
+  }
+
+  public setMissionRoute(waypoints: Waypoint[]): void {
+    if (waypoints.length > 0) {
+      this.waypoints = waypoints;
+      this.currentWaypointIndex = 0;
+      this.latitude = waypoints[0].lat;
+      this.longitude = waypoints[0].lon;
+      if (waypoints.length > 1) {
+        this.targetHeading = initialBearingDeg(waypoints[0].lat, waypoints[0].lon, waypoints[1].lat, waypoints[1].lon);
+        this.heading = this.targetHeading;
+        this.groundTrack = this.targetHeading;
+      }
+    }
   }
 
   /**
-   * Main Physics Update Step
+   * Main Physics Update Step (30-60 Hz)
    */
   public update(
     dt: number,
@@ -93,32 +153,30 @@ export class FlightDynamicsModel {
     simTime: number,
     airDensityKgM3: number = SIMULATION_CONFIG.seaLevelAirDensityKgM3
   ): FlightState {
-    // 1. Waypoint Autopilot Logic (if active)
+    // 1. Waypoint Autopilot Logic
     let distToWpKm = 0;
     let bearingToWpDeg = 0;
 
     const currentWp = this.waypoints[this.currentWaypointIndex] || this.waypoints[0];
-    const dLat = currentWp.lat - this.latitude;
-    const dLon = currentWp.lon - this.longitude;
-    const avgLatRad = ((this.latitude + currentWp.lat) / 2) * (Math.PI / 180);
-    const dNorthM = dLat * 111139.0;
-    const dEastM = dLon * 111139.0 * Math.max(0.1, Math.cos(avgLatRad));
-    distToWpKm = Number((Math.sqrt(dNorthM * dNorthM + dEastM * dEastM) / 1000.0).toFixed(2));
-    const bearingRad = Math.atan2(dEastM, dNorthM);
-    bearingToWpDeg = Math.round((bearingRad * 180 / Math.PI + 360) % 360);
+    distToWpKm = haversineDistanceKm(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
+    bearingToWpDeg = initialBearingDeg(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
 
     if (engineOn && this.navigationMode === 'WAYPOINT_ROUTE') {
       this.targetHeading = bearingToWpDeg;
-      this.targetAltitude = currentWp.altitudeFt;
-      this.targetAirspeed = currentWp.targetAirspeedKmh;
+      if (currentWp.altitudeFt > 0) {
+        this.targetAltitude = currentWp.altitudeFt;
+      }
+      if (currentWp.targetAirspeedKmh > 0) {
+        this.targetAirspeed = currentWp.targetAirspeedKmh;
+      }
 
-      // Waypoint arrival detection
-      if (distToWpKm < SIMULATION_CONFIG.waypointArrivalRadiusKm) {
-        this.currentWaypointIndex = (this.currentWaypointIndex + 1) % this.waypoints.length;
+      // Waypoint arrival detection (within 0.8 km)
+      if (distToWpKm < 0.8 && this.currentWaypointIndex < this.waypoints.length - 1) {
+        this.currentWaypointIndex++;
       }
     }
 
-    // 2. Smooth Heading Dynamics with Inertia & Shortest Angular Arc Wraparound
+    // 2. Smooth Heading Dynamics with Inertia & Limited Turn Rate
     if (engineOn && this.airspeed > 15) {
       let headingDiff = ((this.targetHeading - this.heading + 540) % 360) - 180;
       const turnAgility = Math.min(1.0, this.airspeed / 80.0);
@@ -145,7 +203,7 @@ export class FlightDynamicsModel {
       const vMs = Math.max(0.1, (this.airspeed * 1000.0) / 3600.0);
       const powerWatts = enginePowerHp * 745.7;
 
-      // Propeller thrust: T = (P * eta) / V (with low-speed thrust limit)
+      // Propeller thrust: T = (P * eta) / V
       const effectiveSpeedMs = Math.max(vMs, 14.0);
       const thrustNewtons = (powerWatts * SIMULATION_CONFIG.propulsiveEfficiency) / effectiveSpeedMs;
 
@@ -235,12 +293,12 @@ export class FlightDynamicsModel {
       turbSpeed = Math.sin(simTime * 0.35) * 1.2;
     }
 
-    // 7. Geodetic Coordinate Propagation (Authoritative Reduced-Order Earth Equations)
+    // 7. Geodetic Coordinate Propagation (Authoritative Earth Equations)
     if (engineOn && this.groundSpeed > 1.0) {
       const distanceMovedMeters = groundSpeedMs * dt;
       const effectiveHeadingRad = ((this.groundTrack + turbHeading) * Math.PI) / 180.0;
 
-      // North & East velocity vectors
+      // North & East displacement vectors
       const northDistance = distanceMovedMeters * Math.cos(effectiveHeadingRad);
       const eastDistance = distanceMovedMeters * Math.sin(effectiveHeadingRad);
 
@@ -252,18 +310,18 @@ export class FlightDynamicsModel {
       this.longitude += eastDistance / metersPerDegreeLongitude;
     }
 
-    // 8. Deterministic Flight Phase Logic
+    // 8. Flight Phase Logic
     this.updateFlightPhase(engineOn);
 
-    // 9. Mission Progress Percentage
-    const totalLegs = this.waypoints.length;
-    const legProgress = Math.max(0, Math.min(1.0, 1.0 - (distToWpKm / 4.5)));
+    // 9. Mission Progress Calculation
+    const totalLegs = Math.max(1, this.waypoints.length - 1);
+    const legProgress = Math.max(0, Math.min(1.0, 1.0 - (distToWpKm / 5.0)));
     const totalProgress = ((this.currentWaypointIndex + legProgress) / totalLegs) * 100.0;
-    const missionProgress = Math.round(totalProgress % 100);
+    const missionProgress = Math.min(100, Math.round(totalProgress));
 
     return {
-      latitude: Number(this.latitude.toFixed(4)),
-      longitude: Number(this.longitude.toFixed(4)),
+      latitude: Number(this.latitude.toFixed(6)),
+      longitude: Number(this.longitude.toFixed(6)),
       altitude: Math.round(this.altitude),
       heading: Math.round((this.heading + turbHeading + 360) % 360),
       airspeed: Math.round(Math.max(0, this.airspeed + turbSpeed)),
@@ -296,7 +354,7 @@ export class FlightDynamicsModel {
 
     if (this.throttle < 35 && this.altitude < 150 && this.airspeed < 50) {
       this.flightPhase = 'STARTUP';
-    } else if (this.throttle >= 75 && this.altitude < 1200 && this.verticalSpeed > 150) {
+    } else if (this.throttle >= 70 && this.altitude < 1200 && this.verticalSpeed > 100) {
       this.flightPhase = 'TAKEOFF';
     } else if (this.verticalSpeed >= 180 && this.altitude < this.targetAltitude - 150) {
       this.flightPhase = 'CLIMB';

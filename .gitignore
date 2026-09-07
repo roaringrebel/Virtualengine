@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+scratch/
+push_changes.cjs
+push_to_github.js
+

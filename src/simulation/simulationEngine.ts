@@ -3,13 +3,13 @@ import { Rotax912EngineModel } from './rotax912Model';
 import { Rotax912ThermalModel } from './thermalModel';
 import { SensorSuiteModel } from './sensorModel';
 import { createInitialFaultState, FAULT_DEFINITIONS } from './faultModel';
-import { FlightDynamicsModel, MISSION_WAYPOINTS } from './flightDynamicsModel';
+import { FlightDynamicsModel, DEFAULT_MISSION_WAYPOINTS, MISSION_WAYPOINTS } from './flightDynamicsModel';
 import { ReliabilityModel } from './reliabilityModel';
 import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, FlightState, SimulationState } from '../types/simulation';
 import { TelemetryPacket } from '../types/telemetry';
-import { UAVPosition } from '../types/mission';
+import { LocationCoord, UAVPosition, Waypoint } from '../types/mission';
 
-export { MISSION_WAYPOINTS };
+export { DEFAULT_MISSION_WAYPOINTS, MISSION_WAYPOINTS };
 
 /**
  * Central Simulation Engine
@@ -32,34 +32,35 @@ export class SimulationEngine {
   public sequenceNumber: number = 0;
 
   constructor() {
+    const defaultStartWp = DEFAULT_MISSION_WAYPOINTS[0];
     const initialControls: FlightControlsState = {
       throttle: 70,
-      targetAltitude: 8000,
+      targetAltitude: 6500,
       targetAirspeed: 145,
-      targetHeading: 270,
+      targetHeading: 80,
       ambientTemp: 30,
       engineLoad: 70,
-      navigationMode: 'MANUAL_PILOT',
+      navigationMode: 'WAYPOINT_ROUTE',
       windSpeed: 12,
       windDirection: 240,
-      latitude: 32.5450,
-      longitude: 77.2150,
-      heading: 270,
-      altitude: 8000,
-      airspeed: 145
+      latitude: defaultStartWp.lat,
+      longitude: defaultStartWp.lon,
+      heading: 80,
+      altitude: 0,
+      airspeed: 0
     };
 
     const initialFlight: FlightState = {
-      latitude: 32.5450,
-      longitude: 77.2150,
+      latitude: defaultStartWp.lat,
+      longitude: defaultStartWp.lon,
       altitude: 0,
-      heading: 270,
+      heading: 80,
       airspeed: 0,
       groundSpeed: 0,
       verticalSpeed: 0,
-      groundTrack: 270,
-      targetHeading: 270,
-      targetAltitude: 8000,
+      groundTrack: 80,
+      targetHeading: 80,
+      targetAltitude: 6500,
       targetAirspeed: 145,
       throttle: 70,
       engineLoad: 70,
@@ -67,9 +68,9 @@ export class SimulationEngine {
       windSpeed: 12,
       windDirection: 240,
       currentWaypointIndex: 0,
-      currentWaypointName: MISSION_WAYPOINTS[0].name,
+      currentWaypointName: DEFAULT_MISSION_WAYPOINTS[0].name,
       distanceToWaypointKm: 0,
-      bearingToWaypointDeg: 270,
+      bearingToWaypointDeg: 80,
       missionProgressPercent: 0,
       turnRateDegPerSec: 0,
       bankAngleDeg: 0,
@@ -91,7 +92,7 @@ export class SimulationEngine {
       initialThermal,
       initialFault,
       initialFlight,
-      MISSION_WAYPOINTS,
+      DEFAULT_MISSION_WAYPOINTS,
       0,
       false
     );
@@ -124,6 +125,37 @@ export class SimulationEngine {
       distanceToNextKm: 0,
       missionProgressPercent: 0,
     };
+  }
+
+  public setMissionRoute(waypoints: Waypoint[]): void {
+    if (!waypoints || waypoints.length === 0) return;
+    this.flightModel.setMissionRoute(waypoints);
+    const startWp = waypoints[0];
+    this.state.flight.latitude = startWp.lat;
+    this.state.flight.longitude = startWp.lon;
+    this.state.flight.currentWaypointIndex = 0;
+    this.state.flight.currentWaypointName = startWp.name;
+    this.state.flight.missionProgressPercent = 0;
+    this.state.controls.latitude = startWp.lat;
+    this.state.controls.longitude = startWp.lon;
+    this.uavPosition.lat = startWp.lat;
+    this.uavPosition.lon = startWp.lon;
+    this.uavPosition.currentWaypointIndex = 0;
+    this.uavPosition.missionProgressPercent = 0;
+
+    this.state.reliability = this.reliabilityModel.calculate(
+      this.state.engine,
+      this.state.thermal,
+      this.state.fault,
+      this.state.flight,
+      this.flightModel.waypoints,
+      this.state.simTimeSeconds,
+      this.state.engineOn
+    );
+  }
+
+  public getMissionWaypoints(): Waypoint[] {
+    return this.flightModel.waypoints;
   }
 
   public setEngineOn(isOn: boolean): void {
@@ -216,34 +248,36 @@ export class SimulationEngine {
     this.flightModel.resetToInitialState();
     this.engineModel.reset();
 
+    const startWp = this.flightModel.waypoints[0] || DEFAULT_MISSION_WAYPOINTS[0];
+
     this.state.controls = {
       throttle: 70,
-      targetAltitude: 8000,
+      targetAltitude: 6500,
       targetAirspeed: 145,
-      targetHeading: 270,
+      targetHeading: 80,
       ambientTemp: 30,
       engineLoad: 70,
-      navigationMode: 'MANUAL_PILOT',
+      navigationMode: 'WAYPOINT_ROUTE',
       windSpeed: 12,
       windDirection: 240,
-      latitude: 32.5450,
-      longitude: 77.2150,
-      heading: 270,
+      latitude: startWp.lat,
+      longitude: startWp.lon,
+      heading: 80,
       altitude: 0,
       airspeed: 0
     };
 
     this.state.flight = {
-      latitude: 32.5450,
-      longitude: 77.2150,
+      latitude: startWp.lat,
+      longitude: startWp.lon,
       altitude: 0,
-      heading: 270,
+      heading: 80,
       airspeed: 0,
       groundSpeed: 0,
       verticalSpeed: 0,
-      groundTrack: 270,
-      targetHeading: 270,
-      targetAltitude: 8000,
+      groundTrack: 80,
+      targetHeading: 80,
+      targetAltitude: 6500,
       targetAirspeed: 145,
       throttle: 70,
       engineLoad: 70,
@@ -251,9 +285,9 @@ export class SimulationEngine {
       windSpeed: 12,
       windDirection: 240,
       currentWaypointIndex: 0,
-      currentWaypointName: MISSION_WAYPOINTS[0].name,
+      currentWaypointName: startWp.name,
       distanceToWaypointKm: 0,
-      bearingToWaypointDeg: 270,
+      bearingToWaypointDeg: 80,
       missionProgressPercent: 0,
       turnRateDegPerSec: 0,
       bankAngleDeg: 0,
@@ -273,17 +307,17 @@ export class SimulationEngine {
       this.state.thermal,
       this.state.fault,
       this.state.flight,
-      MISSION_WAYPOINTS,
+      this.flightModel.waypoints,
       0,
       false
     );
 
     this.uavPosition = {
-      lat: 32.5450,
-      lon: 77.2150,
+      lat: startWp.lat,
+      lon: startWp.lon,
       altitude: 0,
       airspeed: 0,
-      heading: 270,
+      heading: 80,
       currentWaypointIndex: 0,
       distanceToNextKm: 0,
       missionProgressPercent: 0,
@@ -374,7 +408,7 @@ export class SimulationEngine {
       this.state.thermal,
       this.state.fault,
       this.state.flight,
-      MISSION_WAYPOINTS,
+      this.flightModel.waypoints,
       this.state.simTimeSeconds,
       this.state.engineOn
     );

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, SidebarTab } from './components/Sidebar';
 import { MissionMap } from './components/MissionMap';
+import { MissionSetupPanel } from './components/MissionSetupPanel';
+import { MissionReliabilityCard } from './components/MissionReliabilityCard';
 import { EnginePanel } from './components/EnginePanel';
 import { FlightControls } from './components/FlightControls';
 import { FaultSimulation } from './components/FaultSimulation';
@@ -20,7 +22,9 @@ import { SimulationEngine } from './simulation/simulationEngine';
 import { TelemetryClient } from './telemetry/telemetryClient';
 import { FaultSeverity, FaultType, SimulationState } from './types/simulation';
 import { TelemetryClientStatus, TelemetryPacket } from './types/telemetry';
-import { MissionEventLog } from './types/mission';
+import { LocationCoord, MissionEventLog, Waypoint } from './types/mission';
+import { DEFAULT_MISSION_WAYPOINTS } from './simulation/flightDynamicsModel';
+import { REAL_WORLD_MISSION_PRESETS } from './simulation/geoMath';
 
 export const App: React.FC = () => {
   // Central Simulation & Telemetry instances
@@ -46,6 +50,13 @@ export const App: React.FC = () => {
   });
   const [latestPacket, setLatestPacket] = useState<TelemetryPacket | null>(null);
 
+  // Active Geographic Mission State (VIT-AP Default)
+  const [currentSource, setCurrentSource] = useState<LocationCoord>(REAL_WORLD_MISSION_PRESETS[0].source);
+  const [currentDestination, setCurrentDestination] = useState<LocationCoord>(REAL_WORLD_MISSION_PRESETS[0].destination);
+  const [activeWaypoints, setActiveWaypoints] = useState<Waypoint[]>(DEFAULT_MISSION_WAYPOINTS);
+  const [isSelectingOnMap, setIsSelectingOnMap] = useState(false);
+  const [selectedMapCoord, setSelectedMapCoord] = useState<{ lat: number; lon: number } | null>(null);
+
   // Active tab & modal states
   const [activeTab, setActiveTab] = useState<SidebarTab>('mission');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -56,6 +67,7 @@ export const App: React.FC = () => {
   // Mission event logs
   const [eventLogs, setEventLogs] = useState<MissionEventLog[]>([
     { id: '1', simTimestamp: '10:40:12', message: 'Simulation initialized: Reduced-Order Rotax 912 ULS Physics Engine', category: 'INFO' },
+    { id: '2', simTimestamp: '10:40:13', message: 'Geographic Mission Route Loaded: VIT-AP University -> Vijayawada Int Airport', category: 'INFO' }
   ]);
 
   // Demo mode state
@@ -144,14 +156,14 @@ export const App: React.FC = () => {
             // Stage 5: Waypoint Auto Engaged
             setDemoStep(5);
             simRef.current.setControl('navigationMode', 'WAYPOINT_ROUTE');
-            simRef.current.setControl('targetAltitude', 8000);
+            simRef.current.setControl('targetAltitude', 6500);
             simRef.current.setControl('targetAirspeed', 145);
-            addEventLog('Demo Stage 5: Waypoint Autopilot engaged along tactical mission corridor (WP1 -> WP2)', 'FLIGHT');
+            addEventLog('Demo Stage 5: Waypoint Autopilot engaged along tactical mission corridor (VIT-AP -> VGA)', 'FLIGHT');
             return 8;
           } else if (nextStep === 6) {
             // Stage 6: Cruise & Route Progress
             setDemoStep(6);
-            addEventLog('Demo Stage 6: Aircraft at CRUISE (8,000 ft, 145 km/h). Planned & actual tracks drawing.', 'FLIGHT');
+            addEventLog('Demo Stage 6: Aircraft at CRUISE (6,500 ft, 145 km/h). Planned & actual tracks drawing.', 'FLIGHT');
             return 8;
           } else if (nextStep === 7) {
             // Stage 7: Inject Excessive Vibration
@@ -180,9 +192,9 @@ export const App: React.FC = () => {
             // Stage 11: Resume Mission Route
             setDemoStep(11);
             simRef.current.setControl('navigationMode', 'WAYPOINT_ROUTE');
-            simRef.current.setControl('targetAltitude', 3500);
+            simRef.current.setControl('targetAltitude', 3000);
             simRef.current.setControl('throttle', 75);
-            addEventLog('Demo Stage 11: Route progression active towards WP4 Southern Vector & Base.', 'FLIGHT');
+            addEventLog('Demo Stage 11: Route progression active towards Destination approach.', 'FLIGHT');
             return 8;
           } else if (nextStep === 12) {
             // Stage 12: Recovery & RTB
@@ -190,7 +202,7 @@ export const App: React.FC = () => {
             simRef.current.setControl('targetAltitude', 0);
             simRef.current.setControl('targetAirspeed', 80);
             simRef.current.setControl('throttle', 40);
-            addEventLog('Demo Stage 12: Recovery approach vector to Home Base. Mission 100% completed.', 'INFO');
+            addEventLog('Demo Stage 12: Recovery approach vector to destination runway. Mission completed.', 'INFO');
             return 8;
           } else {
             // Complete Demo
@@ -207,6 +219,23 @@ export const App: React.FC = () => {
 
     return () => clearInterval(timer);
   }, [isDemoRunning, demoStep]);
+
+  // Route update handler
+  const handleUpdateRoute = (source: LocationCoord, destination: LocationCoord, waypoints: Waypoint[]) => {
+    setCurrentSource(source);
+    setCurrentDestination(destination);
+    setActiveWaypoints(waypoints);
+    simRef.current.setMissionRoute(waypoints);
+    setSimState({ ...simRef.current.state });
+    setUavPos({ ...simRef.current.uavPosition });
+    addEventLog(`Mission Route Updated: ${source.name} -> ${destination.name} (${waypoints.length} WPs)`, 'FLIGHT');
+  };
+
+  // Map click coordinate selection handler
+  const handleMapClick = (coord: { lat: number; lon: number }) => {
+    setSelectedMapCoord(coord);
+    addEventLog(`Map Coordinate Selected: ${coord.lat.toFixed(6)}° N, ${coord.lon.toFixed(6)}° E`, 'INFO');
+  };
 
   // Handlers for Engine & Simulation Controls
   const handleStartEngine = () => {
@@ -280,12 +309,6 @@ export const App: React.FC = () => {
     setActiveTab(tab);
     if (tab === 'settings') {
       setIsSettingsOpen(true);
-    } else if (tab === 'log') {
-      setIsLogOpen(true);
-    } else if (tab === 'telemetry') {
-      setIsTelemetryModalOpen(true);
-    } else if (tab === 'engine') {
-      setIsEngineModalOpen(true);
     }
   };
 
@@ -302,102 +325,240 @@ export const App: React.FC = () => {
         onResetMission={handleResetMission}
       />
 
-      {/* Main Container: Sidebar + Dashboard Grid */}
+      {/* Main Container: Sidebar + Isolated Active Workspace */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Navigation Sidebar */}
         <Sidebar activeTab={activeTab} onSelectTab={handleTabSelect} />
 
-        {/* Dashboard Grid Content */}
-        <main className="flex-1 p-3 overflow-y-auto max-w-[1700px] mx-auto space-y-3">
+        {/* Dashboard Workspace Content */}
+        <main className="flex-1 p-3 overflow-y-auto max-w-[1780px] mx-auto space-y-3">
           
-          {/* Row 1: Large Mission View (Mission Map + Reliability & Decision HUD) + Rotax 912 Engine Panel */}
-          <div className="grid grid-cols-12 gap-3 min-h-[400px]">
-            <div className="col-span-12 lg:col-span-7">
-              <MissionMap
-                uavPosition={uavPos}
-                flightPhase={simState.flightPhase}
-                engineOn={simState.engineOn}
-                flight={simState.flight}
-                reliability={simState.reliability}
-                fault={simState.fault}
-              />
-            </div>
-            <div className="col-span-12 lg:col-span-5">
-              <EnginePanel
-                engine={simState.engine}
-                sensors={simState.sensors}
-                engineOn={simState.engineOn}
-                onStartEngine={handleStartEngine}
-                onStopEngine={handleStopEngine}
-              />
-            </div>
-          </div>
+          {/* ============================================================== */}
+          {/* 1. PRIMARY WORKSPACE: MISSION (SETUP + MAP + RELIABILITY CARD) */}
+          {/* ============================================================== */}
+          {activeTab === 'mission' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-3 min-h-[520px]">
+                {/* Left: Mission Setup & Geodetic Coordinates */}
+                <div className="col-span-12 lg:col-span-4">
+                  <MissionSetupPanel
+                    currentSource={currentSource}
+                    currentDestination={currentDestination}
+                    activeWaypoints={activeWaypoints}
+                    engineOn={simState.engineOn}
+                    isPaused={simState.isPaused}
+                    isSelectingOnMap={isSelectingOnMap}
+                    selectedMapCoord={selectedMapCoord}
+                    navigationMode={simState.controls.navigationMode}
+                    onUpdateRoute={handleUpdateRoute}
+                    onStartEngine={handleStartEngine}
+                    onStopEngine={handleStopEngine}
+                    onTogglePause={handleTogglePause}
+                    onResetMission={handleResetMission}
+                    onToggleMapSelection={(active) => setIsSelectingOnMap(active)}
+                    onToggleAutopilot={(mode) => handleChangeControl('navigationMode', mode)}
+                  />
+                </div>
 
-          {/* Collapsible Flight Model Debug Panel */}
-          <FlightDebugPanel
-            flight={simState.flight}
-            enginePowerHp={simState.engine.powerHp}
-            efficiencyLossRatio={simState.engine.efficiencyLossRatio || 0}
-            speedMultiplier={simState.speedMultiplier}
-            simTimeSeconds={simState.simTimeSeconds}
-            navigationMode={simState.controls.navigationMode}
-            engineOn={simState.engineOn}
-          />
+                {/* Center: Large Real Geographic Map (OpenStreetMap) */}
+                <div className="col-span-12 lg:col-span-5">
+                  <MissionMap
+                    uavPosition={uavPos}
+                    flightPhase={simState.flightPhase}
+                    engineOn={simState.engineOn}
+                    flight={simState.flight}
+                    reliability={simState.reliability}
+                    fault={simState.fault}
+                    waypoints={activeWaypoints}
+                    source={currentSource}
+                    destination={currentDestination}
+                    isSelectingOnMap={isSelectingOnMap}
+                    onMapClick={handleMapClick}
+                  />
+                </div>
 
-          {/* Row 2: Flight Controls + Fault Simulation + Real-time Graphs (3 Cards) */}
-          <div className="grid grid-cols-12 gap-3 min-h-[200px]">
-            <div className="col-span-12 md:col-span-4">
-              <FlightControls
-                controls={simState.controls}
-                flight={simState.flight}
-                onChangeControl={handleChangeControl}
-                engineOn={simState.engineOn}
-              />
-            </div>
-            <div className="col-span-12 md:col-span-4">
-              <FaultSimulation
-                faultState={simState.fault}
-                onInjectFault={handleInjectFault}
-                onClearFault={handleClearFault}
-                engineOn={simState.engineOn}
-              />
-            </div>
-            <div className="col-span-12 md:col-span-4">
-              <RealtimeGraphs
-                sensors={simState.sensors}
-                engineOn={simState.engineOn}
-                airspeed={simState.flight.airspeed}
-              />
-            </div>
-          </div>
+                {/* Right: Mission Reliability & GO/CAUTION/NO-GO Decision */}
+                <div className="col-span-12 lg:col-span-3">
+                  <MissionReliabilityCard
+                    reliability={simState.reliability}
+                    flight={simState.flight}
+                    sensors={simState.sensors}
+                    fault={simState.fault}
+                    flightPhase={simState.flightPhase}
+                    engineOn={simState.engineOn}
+                    source={currentSource}
+                    destination={currentDestination}
+                    activeWaypoints={activeWaypoints}
+                  />
+                </div>
+              </div>
 
-          {/* Row 3: Telemetry Stream + Mission Timeline + Demo Mode + System Architecture (4 Cards) */}
-          <div className="grid grid-cols-12 gap-3 min-h-[175px]">
-            <div className="col-span-12 md:col-span-4">
-              <TelemetryStream
-                telemetryStatus={telemetryStatus}
-                latestPacket={latestPacket}
-                onStartStreaming={() => telemetryRef.current.startStreaming(() => simRef.current.getTelemetryPacket())}
-                onStopStreaming={() => telemetryRef.current.stopStreaming()}
-                onUpdateEndpoint={(url) => telemetryRef.current.setEndpoint(url)}
-              />
+              {/* Bottom Summary: Telemetry Stream + Demo Mode + Architecture Summary */}
+              <div className="grid grid-cols-12 gap-3 min-h-[160px]">
+                <div className="col-span-12 md:col-span-5">
+                  <TelemetryStream
+                    telemetryStatus={telemetryStatus}
+                    latestPacket={latestPacket}
+                    onStartStreaming={() => telemetryRef.current.startStreaming(() => simRef.current.getTelemetryPacket())}
+                    onStopStreaming={() => telemetryRef.current.stopStreaming()}
+                    onUpdateEndpoint={(url) => telemetryRef.current.setEndpoint(url)}
+                  />
+                </div>
+                <div className="col-span-12 sm:col-span-6 md:col-span-3">
+                  <DemoMode
+                    isDemoRunning={isDemoRunning}
+                    demoStep={demoStep}
+                    demoStepRemaining={demoStepRemaining}
+                    onStartDemo={handleStartDemo}
+                    onStopDemo={handleStopDemo}
+                  />
+                </div>
+                <div className="col-span-12 sm:col-span-6 md:col-span-4">
+                  <SystemArchitecture />
+                </div>
+              </div>
             </div>
-            <div className="col-span-12 sm:col-span-4 md:col-span-3">
-              <MissionTimeline logs={eventLogs} />
+          )}
+
+          {/* ============================================================== */}
+          {/* 2. WORKSPACE: FLIGHT CONTROLS & FLIGHT MODEL DEBUG             */}
+          {/* ============================================================== */}
+          {activeTab === 'flight' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-12 md:col-span-5">
+                  <FlightControls
+                    controls={simState.controls}
+                    flight={simState.flight}
+                    onChangeControl={handleChangeControl}
+                    engineOn={simState.engineOn}
+                  />
+                </div>
+                <div className="col-span-12 md:col-span-7">
+                  <FlightDebugPanel
+                    flight={simState.flight}
+                    enginePowerHp={simState.engine.powerHp}
+                    efficiencyLossRatio={simState.engine.efficiencyLossRatio || 0}
+                    speedMultiplier={simState.speedMultiplier}
+                    simTimeSeconds={simState.simTimeSeconds}
+                    navigationMode={simState.controls.navigationMode}
+                    engineOn={simState.engineOn}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="col-span-12 sm:col-span-4 md:col-span-2">
-              <DemoMode
-                isDemoRunning={isDemoRunning}
-                demoStep={demoStep}
-                demoStepRemaining={demoStepRemaining}
-                onStartDemo={handleStartDemo}
-                onStopDemo={handleStopDemo}
-              />
+          )}
+
+          {/* ============================================================== */}
+          {/* 3. WORKSPACE: ENGINE & 9 SENSORS                              */}
+          {/* ============================================================== */}
+          {activeTab === 'engine' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-12 lg:col-span-6">
+                  <EnginePanel
+                    engine={simState.engine}
+                    sensors={simState.sensors}
+                    engineOn={simState.engineOn}
+                    onStartEngine={handleStartEngine}
+                    onStopEngine={handleStopEngine}
+                  />
+                </div>
+                <div className="col-span-12 lg:col-span-6">
+                  <RealtimeGraphs
+                    sensors={simState.sensors}
+                    engineOn={simState.engineOn}
+                    airspeed={simState.flight.airspeed}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="col-span-12 sm:col-span-4 md:col-span-3">
-              <SystemArchitecture />
+          )}
+
+          {/* ============================================================== */}
+          {/* 4. WORKSPACE: FAULTS SIMULATION                               */}
+          {/* ============================================================== */}
+          {activeTab === 'faults' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-12 lg:col-span-6">
+                  <FaultSimulation
+                    faultState={simState.fault}
+                    onInjectFault={handleInjectFault}
+                    onClearFault={handleClearFault}
+                    engineOn={simState.engineOn}
+                  />
+                </div>
+                <div className="col-span-12 lg:col-span-6">
+                  <MissionReliabilityCard
+                    reliability={simState.reliability}
+                    flight={simState.flight}
+                    sensors={simState.sensors}
+                    fault={simState.fault}
+                    flightPhase={simState.flightPhase}
+                    engineOn={simState.engineOn}
+                    source={currentSource}
+                    destination={currentDestination}
+                    activeWaypoints={activeWaypoints}
+                  />
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* 5. WORKSPACE: TELEMETRY STREAM & PACKET INSPECTOR             */}
+          {/* ============================================================== */}
+          {activeTab === 'telemetry' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-12 lg:col-span-6">
+                  <TelemetryStream
+                    telemetryStatus={telemetryStatus}
+                    latestPacket={latestPacket}
+                    onStartStreaming={() => telemetryRef.current.startStreaming(() => simRef.current.getTelemetryPacket())}
+                    onStopStreaming={() => telemetryRef.current.stopStreaming()}
+                    onUpdateEndpoint={(url) => telemetryRef.current.setEndpoint(url)}
+                  />
+                </div>
+                <div className="col-span-12 lg:col-span-6">
+                  <SystemArchitecture />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* 6. WORKSPACE: 3D VIEW (TACTICAL FULL VIEW)                     */}
+          {/* ============================================================== */}
+          {activeTab === '3d' && (
+            <div className="space-y-3">
+              <div className="h-[650px] w-full">
+                <MissionMap
+                  uavPosition={uavPos}
+                  flightPhase={simState.flightPhase}
+                  engineOn={simState.engineOn}
+                  flight={simState.flight}
+                  reliability={simState.reliability}
+                  fault={simState.fault}
+                  waypoints={activeWaypoints}
+                  source={currentSource}
+                  destination={currentDestination}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* 7. WORKSPACE: LOG (MISSION TIMELINE)                          */}
+          {/* ============================================================== */}
+          {activeTab === 'log' && (
+            <div className="space-y-3">
+              <div className="max-w-4xl mx-auto">
+                <MissionTimeline logs={eventLogs} />
+              </div>
+            </div>
+          )}
 
         </main>
       </div>
