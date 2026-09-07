@@ -111,70 +111,93 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // 8-Stage Deterministic Demo Sequence Orchestrator
+  // 12-Stage Deterministic SIH Demo Sequence Orchestrator
   useEffect(() => {
     if (!isDemoRunning) return;
 
     const timer = setInterval(() => {
       setDemoStepRemaining(prev => {
         if (prev <= 1) {
-          // Advance to next stage
           const nextStep = demoStep + 1;
           if (nextStep === 2) {
-            // Stage 2: Takeoff & Climb
+            // Stage 2: Start Engine & Warm-Up
             setDemoStep(2);
-            simRef.current.setControl('throttle', 92);
+            simRef.current.setEngineOn(true);
+            simRef.current.setControl('throttle', 30);
+            addEventLog('Demo Stage 2: Ignition ON, Rotax 912 spooling to Idle (1,600 RPM), oil pressure rising', 'ENGINE');
+            return 7;
+          } else if (nextStep === 3) {
+            // Stage 3: Throttle 70% Applied
+            setDemoStep(3);
+            simRef.current.setControl('throttle', 70);
+            addEventLog('Demo Stage 3: Throttle advanced to 70%, ground roll & longitudinal acceleration initiated', 'FLIGHT');
+            return 7;
+          } else if (nextStep === 4) {
+            // Stage 4: Takeoff & Initial Climb
+            setDemoStep(4);
+            simRef.current.setControl('throttle', 90);
             simRef.current.setControl('targetAltitude', 4500);
             simRef.current.setControl('targetAirspeed', 135);
-            addEventLog('Demo Stage 2: Takeoff thrust applied (92%), climbing to 4,500 ft', 'FLIGHT');
+            addEventLog('Demo Stage 4: Takeoff achieved! Positive VSI climb vectoring to 4,500 ft', 'FLIGHT');
             return 8;
-          } else if (nextStep === 3) {
-            // Stage 3: Waypoint Auto Cruise
-            setDemoStep(3);
+          } else if (nextStep === 5) {
+            // Stage 5: Waypoint Auto Engaged
+            setDemoStep(5);
             simRef.current.setControl('navigationMode', 'WAYPOINT_ROUTE');
             simRef.current.setControl('targetAltitude', 8000);
             simRef.current.setControl('targetAirspeed', 145);
-            addEventLog('Demo Stage 3: Waypoint Autopilot engaged along tactical route corridor', 'FLIGHT');
-            return 8;
-          } else if (nextStep === 4) {
-            // Stage 4: High Engine Load
-            setDemoStep(4);
-            simRef.current.setControl('throttle', 85);
-            simRef.current.setControl('engineLoad', 85);
-            addEventLog('Demo Stage 4: Engine load increased to 85% for payload surveillance', 'ENGINE');
-            return 6;
-          } else if (nextStep === 5) {
-            // Stage 5: Inject Excessive Vibration
-            setDemoStep(5);
-            simRef.current.setFault('EXCESSIVE_VIBRATION', 'HIGH');
-            addEventLog('Demo Stage 5: FAULT INJECTED — Excessive Vibration (HIGH, > 6.5 mm/s RMS)', 'FAULT');
+            addEventLog('Demo Stage 5: Waypoint Autopilot engaged along tactical mission corridor (WP1 -> WP2)', 'FLIGHT');
             return 8;
           } else if (nextStep === 6) {
-            // Stage 6: Power Sag & Airspeed Decay
+            // Stage 6: Cruise & Route Progress
             setDemoStep(6);
-            addEventLog('Demo Stage 6: Engine power derated by 18%. RPM instability and airspeed decay observed.', 'ENGINE');
+            addEventLog('Demo Stage 6: Aircraft at CRUISE (8,000 ft, 145 km/h). Planned & actual tracks drawing.', 'FLIGHT');
             return 8;
           } else if (nextStep === 7) {
-            // Stage 7: Telemetry Streaming
+            // Stage 7: Inject Excessive Vibration
             setDemoStep(7);
-            addEventLog('Demo Stage 7: Live telemetry dispatched to Digital Twin (Website 2) with anomaly alerts.', 'TELEMETRY');
+            simRef.current.setFault('EXCESSIVE_VIBRATION', 'MEDIUM');
+            addEventLog('Demo Stage 7: FAULT INJECTED — Excessive Vibration (> 6.5 mm/s RMS). Digital Twin alerted.', 'FAULT');
             return 8;
           } else if (nextStep === 8) {
-            // Stage 8: Fault Clearance & RTB
+            // Stage 8: Power Sag & Decision: CAUTION
             setDemoStep(8);
+            addEventLog('Demo Stage 8: Vibration ↑, Engine condition ↓ (70%), Power sag observed. Decision: CAUTION.', 'ENGINE');
+            return 8;
+          } else if (nextStep === 9) {
+            // Stage 9: Severe Degradation & Decision: NO-GO
+            setDemoStep(9);
+            simRef.current.setFault('OVERHEATING', 'HIGH');
+            addEventLog('Demo Stage 9: SEVERE OVERHEATING injected (CHT > 175°C, RUL < 5h). Decision: NO-GO!', 'FAULT');
+            return 8;
+          } else if (nextStep === 10) {
+            // Stage 10: Clear Fault & Recovery
+            setDemoStep(10);
             simRef.current.clearFault();
-            simRef.current.setControl('navigationMode', 'MANUAL_PILOT');
+            addEventLog('Demo Stage 10: Fault CLEARED. Thermodynamics cooling, SOH recovering (92%), Decision: GO.', 'INFO');
+            return 8;
+          } else if (nextStep === 11) {
+            // Stage 11: Resume Mission Route
+            setDemoStep(11);
+            simRef.current.setControl('navigationMode', 'WAYPOINT_ROUTE');
             simRef.current.setControl('targetAltitude', 3500);
-            simRef.current.setControl('throttle', 70);
-            simRef.current.setControl('engineLoad', 70);
-            addEventLog('Demo Stage 8: Fault CLEARED. Normal engine thermodynamics restored. Vectoring RTB.', 'INFO');
+            simRef.current.setControl('throttle', 75);
+            addEventLog('Demo Stage 11: Route progression active towards WP4 Southern Vector & Base.', 'FLIGHT');
+            return 8;
+          } else if (nextStep === 12) {
+            // Stage 12: Recovery & RTB
+            setDemoStep(12);
+            simRef.current.setControl('targetAltitude', 0);
+            simRef.current.setControl('targetAirspeed', 80);
+            simRef.current.setControl('throttle', 40);
+            addEventLog('Demo Stage 12: Recovery approach vector to Home Base. Mission 100% completed.', 'INFO');
             return 8;
           } else {
-            // Finish Demo
+            // Complete Demo
             setIsDemoRunning(false);
             setDemoStep(1);
             simRef.current.clearFault();
-            addEventLog('Demo Scenario Finished: All 8 judging stages completed successfully.', 'INFO');
+            addEventLog('Demo Scenario Finished: All 12 judging stages completed successfully.', 'INFO');
             return 8;
           }
         }
@@ -240,12 +263,10 @@ export const App: React.FC = () => {
   const handleStartDemo = () => {
     setIsDemoRunning(true);
     setDemoStep(1);
-    setDemoStepRemaining(8);
-    simRef.current.setEngineOn(true);
-    simRef.current.setControl('throttle', 40);
-    simRef.current.setControl('engineLoad', 50);
+    setDemoStepRemaining(7);
+    simRef.current.setEngineOn(false);
     simRef.current.clearFault();
-    addEventLog('Demo Scenario Started: Stage 1 — Engine Startup & Systems Check', 'INFO');
+    addEventLog('Demo Scenario Started: Stage 1 — Base Airfield Standby (Decision: GO)', 'INFO');
   };
 
   const handleStopDemo = () => {
@@ -289,14 +310,16 @@ export const App: React.FC = () => {
         {/* Dashboard Grid Content */}
         <main className="flex-1 p-3 overflow-y-auto max-w-[1700px] mx-auto space-y-3">
           
-          {/* Row 1: Mission Map (3D Continuous Left) + Rotax 912 Engine Panel (Right) */}
-          <div className="grid grid-cols-12 gap-3 min-h-[380px]">
+          {/* Row 1: Large Mission View (Mission Map + Reliability & Decision HUD) + Rotax 912 Engine Panel */}
+          <div className="grid grid-cols-12 gap-3 min-h-[400px]">
             <div className="col-span-12 lg:col-span-7">
               <MissionMap
                 uavPosition={uavPos}
                 flightPhase={simState.flightPhase}
                 engineOn={simState.engineOn}
                 flight={simState.flight}
+                reliability={simState.reliability}
+                fault={simState.fault}
               />
             </div>
             <div className="col-span-12 lg:col-span-5">

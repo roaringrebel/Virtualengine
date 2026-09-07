@@ -7,10 +7,18 @@ import {
   LocateFixed,
   Plus,
   Minus,
-  Layers,
-  Plane
+  ShieldCheck,
+  AlertTriangle,
+  AlertOctagon,
+  Mountain,
+  Route,
+  Activity,
+  Compass,
+  Gauge,
+  Clock,
+  CheckCircle2
 } from 'lucide-react';
-import { FlightPhase, FlightState } from '../types/simulation';
+import { FaultState, FlightPhase, FlightState, MissionReliabilityState } from '../types/simulation';
 import { UAVPosition } from '../types/mission';
 import { MISSION_WAYPOINTS } from '../simulation/simulationEngine';
 
@@ -19,16 +27,25 @@ interface MissionMapProps {
   flightPhase: FlightPhase;
   engineOn: boolean;
   flight?: FlightState;
+  reliability?: MissionReliabilityState;
+  fault?: FaultState;
 }
 
-export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase, engineOn, flight }) => {
+export const MissionMap: React.FC<MissionMapProps> = ({ 
+  uavPosition, 
+  flightPhase, 
+  engineOn, 
+  flight,
+  reliability,
+  fault
+}) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const threeContainerRef = useRef<HTMLDivElement>(null);
 
   // View Mode: 'map' (Leaflet Geographic Map) | '3d' (3D Tactical UAV View)
   const [activeView, setActiveView] = useState<'map' | '3d'>('map');
-  // Default map style is OpenStreetMap (Real Geographic Map, zero API key required)
-  const [mapStyle, setMapStyle] = useState<'osm' | 'satellite' | 'dark'>('osm');
+  // Map styles: 'geographic' (OSM) | 'terrain' (OpenTopoMap) | 'satellite' (Esri)
+  const [mapStyle, setMapStyle] = useState<'geographic' | 'terrain' | 'satellite'>('geographic');
   const [followUav, setFollowUav] = useState<boolean>(true);
 
   // Leaflet references
@@ -36,6 +53,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   const uavMarkerRef = useRef<L.Marker | null>(null);
   const plannedRouteLineRef = useRef<L.Polyline | null>(null);
   const actualTrackLineRef = useRef<L.Polyline | null>(null);
+  const completedRouteLineRef = useRef<L.Polyline | null>(null);
   const waypointMarkersRef = useRef<L.Marker[]>([]);
   const baseTileLayerRef = useRef<L.TileLayer | null>(null);
   const actualTrackPointsRef = useRef<[number, number][]>([]);
@@ -48,12 +66,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   const uavGroupRef = useRef<THREE.Group | null>(null);
   const propellerRef = useRef<THREE.Group | null>(null);
 
-  // Keep a persistent ref to latest state for 3D animation loop
+  // Persistent ref to latest state for animation loops
   const stateRef = useRef({
     uavPosition,
     flightPhase,
     engineOn,
     flight,
+    reliability,
     followUav
   });
 
@@ -63,26 +82,27 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
       flightPhase,
       engineOn,
       flight,
+      reliability,
       followUav
     };
-  }, [uavPosition, flightPhase, engineOn, flight, followUav]);
+  }, [uavPosition, flightPhase, engineOn, flight, reliability, followUav]);
 
-  // Tile layer URLs (100% Free & Open — Zero API keys/tokens required)
+  // Free Open Tile Layer Providers — Zero Paid API Keys Required
   const TILE_LAYERS = {
-    osm: {
+    geographic: {
       url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
       maxZoom: 19
+    },
+    terrain: {
+      url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+      attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+      maxZoom: 17
     },
     satellite: {
       url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
       maxZoom: 18
-    },
-    dark: {
-      url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      maxZoom: 19
     }
   };
 
@@ -105,7 +125,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
     });
     mapInstanceRef.current = map;
 
-    // Add Base Tile Layer (Default OSM)
+    // Add Base Tile Layer
     const currentLayerCfg = TILE_LAYERS[mapStyle];
     const tileLayer = L.tileLayer(currentLayerCfg.url, {
       maxZoom: currentLayerCfg.maxZoom,
@@ -127,6 +147,15 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
       lineCap: 'round'
     }).addTo(map);
     plannedRouteLineRef.current = plannedLine;
+
+    // Create Completed Route Polyline (Green Solid)
+    const completedLine = L.polyline([[MISSION_WAYPOINTS[0].lat, MISSION_WAYPOINTS[0].lon]], {
+      color: '#10B981',
+      weight: 3.5,
+      opacity: 0.9,
+      lineCap: 'round'
+    }).addTo(map);
+    completedRouteLineRef.current = completedLine;
 
     // Create Actual Travelled Track Polyline (Cyan Solid)
     actualTrackPointsRef.current = [[uavPosition.lat, uavPosition.lon]];
@@ -326,6 +355,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
       if (actualTrackLineRef.current) {
         actualTrackLineRef.current.setLatLngs(actualTrackPointsRef.current);
       }
+
+      // Update completed route line
+      if (completedRouteLineRef.current && uavPosition.currentWaypointIndex > 0) {
+        const completedCoords = MISSION_WAYPOINTS.slice(0, uavPosition.currentWaypointIndex + 1).map(w => [w.lat, w.lon] as [number, number]);
+        completedCoords.push([currentLat, currentLon]);
+        completedRouteLineRef.current.setLatLngs(completedCoords);
+      }
     }
 
     // Reset track if at home airfield and flight phase is STANDBY
@@ -335,6 +371,9 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
         lastTrackAppendPosRef.current = [currentLat, currentLon];
         if (actualTrackLineRef.current) {
           actualTrackLineRef.current.setLatLngs(actualTrackPointsRef.current);
+        }
+        if (completedRouteLineRef.current) {
+          completedRouteLineRef.current.setLatLngs([[MISSION_WAYPOINTS[0].lat, MISSION_WAYPOINTS[0].lon]]);
         }
       }
     }
@@ -353,7 +392,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
         map.panTo([currentLat, currentLon], { animate: true, duration: 0.9 });
       }
     }
-  }, [uavPosition.lat, uavPosition.lon, uavPosition.heading, engineOn, followUav]);
+  }, [uavPosition.lat, uavPosition.lon, uavPosition.heading, uavPosition.currentWaypointIndex, engineOn, followUav]);
 
   // --------------------------------------------------------------------------
   // 4. THREE.JS 3D TACTICAL VIEW INITIALIZATION (Separate Clean 3D Mode)
@@ -510,56 +549,73 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
   };
 
   const currentWp = MISSION_WAYPOINTS[uavPosition.currentWaypointIndex] || MISSION_WAYPOINTS[0];
+  const nextWp = MISSION_WAYPOINTS[(uavPosition.currentWaypointIndex + 1) % MISSION_WAYPOINTS.length];
   const verticalSpeedFpm = flight?.verticalSpeed ?? 0;
   const verticalSpeedMs = (verticalSpeedFpm * 0.00508).toFixed(1);
   const groundTrackDeg = flight?.groundTrack ?? uavPosition.heading;
   const groundSpeedKmh = flight?.groundSpeed ?? uavPosition.airspeed;
 
+  // Reliability & Terrain data
+  const relScore = reliability?.reliabilityScore ?? (engineOn ? 92 : 98);
+  const riskLevel = reliability?.riskLevel ?? 'LOW';
+  const decision = reliability?.decision ?? 'GO';
+  const engineSOH = reliability?.engineSOH ?? 94;
+  const rulHours = reliability?.rulHours ?? 236;
+  const faultRisk = reliability?.faultRiskPercent ?? 3;
+  const missionMargin = reliability?.missionMarginHours ?? 4.2;
+  const anomalyScore = reliability?.anomalyScore ?? 0.08;
+  const terrainElevFt = reliability?.terrainElevationFt ?? 4200;
+  const aglFt = reliability?.aglAltitudeFt ?? (engineOn ? Math.max(0, 3850 + uavPosition.altitude - terrainElevFt) : 0);
+  const routeDevKm = reliability?.routeDeviationKm ?? 0.2;
+  const distRemKm = reliability?.distanceRemainingKm ?? 18.2;
+  const estTimeRem = reliability?.timeRemainingFormatted ?? '07:35';
+  const missionTime = reliability?.missionTimeFormatted ?? '04:12';
+
   return (
-    <div className="bg-white rounded-xl border border-[#E5E7EB] p-3.5 shadow-xs flex flex-col justify-between h-full select-none overflow-hidden">
+    <div className="bg-white rounded-xl border border-[#E5E7EB] p-3.5 shadow-sm flex flex-col justify-between h-full select-none overflow-hidden space-y-2">
       
       {/* 1. Header Controls Bar */}
-      <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-md bg-orange-50 border border-orange-200 flex items-center justify-center text-[#F97316]">
             <Navigation className="w-3.5 h-3.5" />
           </div>
           <div>
             <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase flex items-center gap-2">
-              <span>MISSION MAP &mdash; REAL GEOGRAPHIC TERRAIN</span>
-              <span className="text-[8px] font-mono font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-300">
-                OPENSTREETMAP
+              <span>MISSION VIEW &mdash; GEOGRAPHIC & TERRAIN MAP</span>
+              <span className="text-[8px] font-mono font-bold bg-orange-100 text-orange-800 px-1.5 py-0.2 rounded border border-orange-300">
+                VIRTUAL MALE UAV
               </span>
             </h2>
             <div className="text-[10px] text-[#6B7280]">
-              Simulated MALE UAV Flight Dynamics &bull; Rotax 912 ULS Engine
+              Reduced-Order Rotax 912 ULS Flight Dynamics &bull; Digital Twin Link
             </div>
           </div>
         </div>
 
         {/* View Mode & Map Controls */}
         <div className="flex items-center gap-1.5 text-xs flex-wrap">
-          {/* Mode Switcher: Geographic Map vs 3D View */}
+          {/* Mode Switcher: Geographic vs 3D */}
           <div className="flex items-center bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB] text-[10px] font-bold">
             <button
               onClick={() => setActiveView('map')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
+              className={`px-2 py-1 rounded-md transition-all ${
                 activeView === 'map'
                   ? 'bg-white text-[#F97316] shadow-xs'
                   : 'text-[#6B7280] hover:text-[#1F2937]'
               }`}
             >
-              Geographic Map
+              2D Map
             </button>
             <button
               onClick={() => setActiveView('3d')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
+              className={`px-2 py-1 rounded-md transition-all ${
                 activeView === '3d'
                   ? 'bg-white text-[#F97316] shadow-xs'
                   : 'text-[#6B7280] hover:text-[#1F2937]'
               }`}
             >
-              3D Tactical View
+              3D Tactical
             </button>
           </div>
 
@@ -567,13 +623,22 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           {activeView === 'map' && (
             <div className="flex items-center bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB] text-[10px] font-semibold">
               <button
-                onClick={() => setMapStyle('osm')}
+                onClick={() => setMapStyle('geographic')}
                 className={`px-2 py-1 rounded-md transition-all ${
-                  mapStyle === 'osm' ? 'bg-[#F97316] text-white font-bold' : 'text-[#6B7280] hover:text-[#1F2937]'
+                  mapStyle === 'geographic' ? 'bg-[#F97316] text-white font-bold' : 'text-[#6B7280] hover:text-[#1F2937]'
                 }`}
-                title="OpenStreetMap (Default Light Geographic Terrain)"
+                title="Geographic Map (OpenStreetMap: Roads, Towns, Boundaries)"
               >
-                Street (OSM)
+                Geographic
+              </button>
+              <button
+                onClick={() => setMapStyle('terrain')}
+                className={`px-2 py-1 rounded-md transition-all ${
+                  mapStyle === 'terrain' ? 'bg-[#F97316] text-white font-bold' : 'text-[#6B7280] hover:text-[#1F2937]'
+                }`}
+                title="Terrain Topographic Elevation Contours (OpenTopoMap)"
+              >
+                Terrain
               </button>
               <button
                 onClick={() => setMapStyle('satellite')}
@@ -584,22 +649,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
               >
                 Satellite
               </button>
-              <button
-                onClick={() => setMapStyle('dark')}
-                className={`px-2 py-1 rounded-md transition-all ${
-                  mapStyle === 'dark' ? 'bg-[#1E293B] text-white font-bold' : 'text-[#6B7280] hover:text-[#1F2937]'
-                }`}
-                title="Tactical Dark Mode"
-              >
-                Tactical Dark
-              </button>
             </div>
           )}
 
           {/* Follow UAV Toggle */}
           <button
             onClick={() => setFollowUav(!followUav)}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${
               followUav
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                 : 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200'
@@ -622,7 +678,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
       </div>
 
       {/* 2. Main Map / 3D Canvas Area */}
-      <div className="relative w-full h-[340px] rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#E2E8F0]">
+      <div className="relative w-full h-[360px] rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#E2E8F0]">
         
         {/* Leaflet 2D Map Container */}
         <div
@@ -641,7 +697,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
 
         {/* Zoom In / Out Overlay Controls (For Leaflet Map) */}
         {activeView === 'map' && (
-          <div className="absolute right-3 top-24 flex flex-col gap-1 z-[500]">
+          <div className="absolute right-3 top-28 flex flex-col gap-1 z-[500]">
             <button
               onClick={handleZoomIn}
               className="w-7 h-7 rounded-lg bg-white/95 backdrop-blur-xs border border-gray-300 shadow-md flex items-center justify-center text-gray-700 hover:bg-gray-100 hover:text-black transition-all"
@@ -659,33 +715,45 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
           </div>
         )}
 
-        {/* Top-Left Telemetry Overlay HUD (Truthful, Aerospace Engineering Readouts) */}
-        <div className="absolute top-2.5 left-2.5 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1">
-          <div className="text-[10px] font-bold text-[#F97316] uppercase tracking-wider flex items-center justify-between gap-4 border-b border-slate-800 pb-1">
+        {/* ------------------------------------------------------------- */}
+        {/* TOP-LEFT: FLIGHT DYNAMICS & TERRAIN ELEVATION HUD             */}
+        {/* ------------------------------------------------------------- */}
+        <div className="absolute top-2 left-2 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1 w-[190px]">
+          <div className="text-[10px] font-bold text-[#F97316] uppercase tracking-wider flex items-center justify-between border-b border-slate-800 pb-1">
             <span>VIRTUAL MALE UAV</span>
             <span className="text-[8.5px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
               {flightPhase}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-0.5">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5">
             <div className="text-slate-400">POSITION:</div>
-            <div className="text-right text-cyan-300 font-bold">
+            <div className="text-right text-cyan-300 font-bold truncate">
               {uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E
             </div>
 
-            <div className="text-slate-400">ALTITUDE:</div>
+            <div className="text-slate-400">ALTITUDE (MSL):</div>
             <div className="text-right text-orange-400 font-bold">
-              {engineOn ? uavPosition.altitude.toLocaleString() : 0} ft
+              {engineOn ? (3850 + uavPosition.altitude).toLocaleString() : terrainElevFt} ft
+            </div>
+
+            <div className="text-slate-400">TERRAIN ELEV:</div>
+            <div className="text-right text-amber-300 font-bold">
+              {terrainElevFt.toLocaleString()} ft
+            </div>
+
+            <div className="text-slate-400">AGL HEIGHT:</div>
+            <div className="text-right text-emerald-400 font-bold">
+              {aglFt.toLocaleString()} ft
             </div>
 
             <div className="text-slate-400">AIRSPEED:</div>
-            <div className="text-right text-emerald-400 font-bold">
+            <div className="text-right text-emerald-300 font-bold">
               {engineOn ? uavPosition.airspeed : 0} km/h
             </div>
 
             <div className="text-slate-400">GROUND SPEED:</div>
-            <div className="text-right text-emerald-300 font-bold">
+            <div className="text-right text-cyan-300 font-bold">
               {engineOn ? groundSpeedKmh : 0} km/h
             </div>
 
@@ -699,46 +767,120 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
               {Number(verticalSpeedMs) >= 0 ? `+${verticalSpeedMs}` : verticalSpeedMs} m/s
             </div>
           </div>
+          <div className="text-[7.5px] text-slate-500 border-t border-slate-800/80 pt-0.5 text-right font-sans italic">
+            *Simulated terrain elevation
+          </div>
         </div>
 
-        {/* Top-Right Waypoint & Route Info Overlay */}
-        <div className="absolute top-2.5 right-2.5 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1">
-          <div className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider border-b border-slate-800 pb-1 flex items-center justify-between gap-3">
-            <span>MISSION ROUTE</span>
+        {/* ------------------------------------------------------------- */}
+        {/* TOP-RIGHT: PROMINENT MISSION RELIABILITY & DECISION (GO/CAUTION/NO-GO) */}
+        {/* ------------------------------------------------------------- */}
+        <div className="absolute top-2 right-2 bg-slate-950/90 backdrop-blur-md border border-slate-700/70 rounded-lg p-2.5 text-white font-mono shadow-xl pointer-events-none z-[500] w-[215px] space-y-1.5">
+          
+          {/* Header & Big Decision Badge */}
+          <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+            <div>
+              <div className="text-[9px] text-slate-400 uppercase font-semibold">MISSION DECISION</div>
+              <div className="text-[12px] font-black tracking-wide text-white">
+                RELIABILITY: <span className="text-[#F97316]">{relScore}%</span>
+              </div>
+            </div>
+
+            {/* Decision Pill */}
+            <div className={`px-2.5 py-0.5 rounded-md font-extrabold text-[11px] shadow-sm flex items-center gap-1 ${
+              decision === 'GO'
+                ? 'bg-emerald-500 text-white shadow-emerald-500/30'
+                : decision === 'CAUTION'
+                ? 'bg-amber-500 text-slate-950 animate-pulse'
+                : 'bg-red-600 text-white animate-pulse'
+            }`}>
+              {decision === 'GO' && <ShieldCheck className="w-3.5 h-3.5" />}
+              {decision === 'CAUTION' && <AlertTriangle className="w-3.5 h-3.5" />}
+              {decision === 'NO-GO' && <AlertOctagon className="w-3.5 h-3.5" />}
+              <span>{decision}</span>
+            </div>
+          </div>
+
+          {/* Sub-Metrics Breakdown */}
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+            <div className="text-slate-400">ENGINE SOH:</div>
+            <div className="text-right text-emerald-400 font-bold">{engineSOH}%</div>
+
+            <div className="text-slate-400">RUL (HOURS):</div>
+            <div className="text-right text-cyan-300 font-bold">{rulHours} h</div>
+
+            <div className="text-slate-400">FAULT RISK:</div>
+            <div className={`text-right font-bold ${faultRisk > 30 ? 'text-amber-400' : 'text-slate-200'}`}>
+              {faultRisk}%
+            </div>
+
+            <div className="text-slate-400">MISSION MARGIN:</div>
+            <div className="text-right text-white font-bold">{missionMargin} h</div>
+
+            <div className="text-slate-400">ANOMALY SCORE:</div>
+            <div className="text-right text-purple-300 font-bold">{anomalyScore}</div>
+
+            <div className="text-slate-400">MISSION RISK:</div>
+            <div className={`text-right font-bold ${
+              riskLevel === 'LOW' ? 'text-emerald-400' : riskLevel === 'MEDIUM' ? 'text-amber-400' : 'text-red-400'
+            }`}>
+              {riskLevel}
+            </div>
+          </div>
+
+          <div className="text-[8px] text-slate-400 bg-slate-900/90 border border-slate-800 p-1 rounded font-sans leading-tight">
+            {reliability?.decisionReason || 'Mission can safely continue under nominal parameters.'}
+          </div>
+        </div>
+
+        {/* ------------------------------------------------------------- */}
+        {/* BOTTOM-RIGHT: MISSION ROUTE STATUS HUD                        */}
+        {/* ------------------------------------------------------------- */}
+        <div className="absolute bottom-2 right-2 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2 text-white font-mono text-[9px] shadow-lg pointer-events-none z-[500] space-y-0.5 w-[190px]">
+          <div className="text-[9.5px] font-bold text-cyan-400 uppercase tracking-wider border-b border-slate-800 pb-0.5 flex items-center justify-between">
+            <span>MISSION STATUS</span>
             <span className="text-orange-400">{uavPosition.missionProgressPercent}%</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5 text-[9px]">
-            <div className="text-slate-400">TARGET WP:</div>
-            <div className="text-right text-amber-300 font-bold truncate max-w-[120px]">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5 text-[8.5px]">
+            <div className="text-slate-400">CURRENT WP:</div>
+            <div className="text-right text-amber-300 font-bold truncate">
               {currentWp.name.split('—')[0]}
             </div>
 
-            <div className="text-slate-400">DISTANCE:</div>
-            <div className="text-right text-white font-bold">
-              {uavPosition.distanceToNextKm} km
+            <div className="text-slate-400">NEXT WP:</div>
+            <div className="text-right text-cyan-300 font-bold truncate">
+              {nextWp.name.split('—')[0]}
             </div>
 
-            <div className="text-slate-400">BEARING:</div>
-            <div className="text-right text-cyan-300 font-bold">
-              {flight?.bearingToWaypointDeg ?? uavPosition.heading}°
+            <div className="text-slate-400">DIST REMAINING:</div>
+            <div className="text-right text-white font-bold">{distRemKm} km</div>
+
+            <div className="text-slate-400">EST. TIME REM:</div>
+            <div className="text-right text-emerald-400 font-bold">{estTimeRem}</div>
+
+            <div className="text-slate-400">ROUTE DEVIATION:</div>
+            <div className={`text-right font-bold ${routeDevKm > 0.8 ? 'text-red-400 animate-pulse' : 'text-slate-200'}`}>
+              {routeDevKm} km
             </div>
           </div>
         </div>
 
-        {/* Bottom Legend & Simulation Notice */}
+        {/* ------------------------------------------------------------- */}
+        {/* BOTTOM-LEFT: LEGEND & SIMULATION DISCLAIMER                   */}
+        {/* ------------------------------------------------------------- */}
         <div className="absolute bottom-2 left-2 bg-slate-950/85 backdrop-blur-xs border border-slate-800 px-2.5 py-1 rounded-md text-[8.5px] font-mono text-slate-300 flex items-center gap-3 z-[500] flex-wrap">
           <div className="flex items-center gap-1">
             <span className="w-3 h-0.5 bg-[#F97316] inline-block border-t border-dashed border-[#F97316]" />
-            <span>Planned Route</span>
+            <span>Planned</span>
           </div>
           <div className="flex items-center gap-1">
             <span className="w-3 h-1 bg-[#06B6D4] inline-block rounded-full" />
-            <span>Travelled Track</span>
+            <span>Actual Track</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#10B981] inline-block" />
-            <span>Home Base</span>
+            <span className="w-3 h-1 bg-[#10B981] inline-block rounded-full" />
+            <span>Completed</span>
           </div>
           <div className="text-[8px] text-slate-400 border-l border-slate-700 pl-2">
             SIMULATED UAV FLIGHT &bull; PHYSICS-BASED MODEL
@@ -747,7 +889,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
 
         {/* Attribution watermark */}
         {activeView === 'map' && (
-          <div className="absolute bottom-1 right-2 bg-white/70 backdrop-blur-xs px-1.5 py-0.2 rounded text-[8px] text-gray-700 z-[500] pointer-events-auto">
+          <div className="absolute bottom-1 right-2 bg-white/70 backdrop-blur-xs px-1.5 py-0.2 rounded text-[8px] text-gray-700 z-[500] pointer-events-auto hidden sm:block">
             &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="underline hover:text-black">OpenStreetMap</a> contributors
           </div>
         )}

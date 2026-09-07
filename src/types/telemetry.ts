@@ -49,11 +49,20 @@ export interface TelemetryPacket {
   wind_speed: number; // Wind Speed (km/h)
   wind_direction: number; // Wind Direction (degrees from)
 
-  // Fault Diagnostics
+  // Fault Diagnostics & Digital Twin Health
   fault: string; // "NORMAL" | "EXCESSIVE_VIBRATION" | "LOW_OIL_PRESSURE" | "COOLING_PROBLEM" | etc.
   fault_severity: number | string; // Numeric 0 (normal), 0.5 (low), 0.8 (med), 1.0 (high)
   preset?: string;
   afr?: number;
+
+  // Mission Reliability & Decision (Digital Twin Link)
+  mission_reliability?: number; // 0 - 100%
+  mission_risk?: string;        // "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  mission_decision?: string;    // "GO" | "CAUTION" | "NO-GO"
+  soh?: number;                 // 0 - 100%
+  rul_hours?: number;           // Remaining Useful Life (hours)
+  terrain_elevation?: number;   // ft MSL
+  agl_altitude?: number;        // ft AGL
 }
 
 export type ConnectionStatus = 'CONNECTED' | 'LOCAL_SIMULATION_MODE' | 'CONNECTING' | 'DISCONNECTED';

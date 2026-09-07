@@ -122,6 +122,29 @@ export interface FaultState {
   propagationPath: string[];
 }
 
+export type MissionRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type MissionDecision = 'GO' | 'CAUTION' | 'NO-GO';
+
+export interface MissionReliabilityState {
+  reliabilityScore: number;         // 0 - 100%
+  riskLevel: MissionRisk;           // LOW | MEDIUM | HIGH | CRITICAL
+  decision: MissionDecision;         // GO | CAUTION | NO-GO
+  decisionReason: string;
+  engineSOH: number;                // 0 - 100%
+  rulHours: number;                 // Remaining Useful Life in hours
+  faultRiskPercent: number;         // 0 - 100%
+  missionMarginHours: number;       // RUL - remaining mission time (hours)
+  anomalyScore: number;             // 0.0 - 1.0
+  missionProgressPercent: number;   // 0 - 100%
+  distanceRemainingKm: number;      // km
+  timeRemainingSeconds: number;     // seconds
+  timeRemainingFormatted: string;   // mm:ss
+  missionTimeFormatted: string;     // mm:ss
+  terrainElevationFt: number;       // ft MSL
+  aglAltitudeFt: number;            // ft AGL (Altitude - Terrain)
+  routeDeviationKm: number;         // cross-track deviation (km)
+}
+
 export interface SimulationState {
   isRunning: boolean;
   isPaused: boolean;
@@ -137,5 +160,6 @@ export interface SimulationState {
   thermal: ThermalState;
   sensors: SensorSuiteState;
   fault: FaultState;
+  reliability: MissionReliabilityState;
 }
 

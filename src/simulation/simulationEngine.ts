@@ -4,6 +4,7 @@ import { Rotax912ThermalModel } from './thermalModel';
 import { SensorSuiteModel } from './sensorModel';
 import { createInitialFaultState, FAULT_DEFINITIONS } from './faultModel';
 import { FlightDynamicsModel, MISSION_WAYPOINTS } from './flightDynamicsModel';
+import { ReliabilityModel } from './reliabilityModel';
 import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, FlightState, SimulationState } from '../types/simulation';
 import { TelemetryPacket } from '../types/telemetry';
 import { UAVPosition } from '../types/mission';
@@ -14,13 +15,14 @@ export { MISSION_WAYPOINTS };
  * Central Simulation Engine
  * Single source of truth unifying the physics-inspired flight dynamics model,
  * Reduced-Order Rotax 912 ULS engine model, thermodynamics, sensor suite,
- * and unified real-time telemetry generation.
+ * mission reliability / health assessment, and unified real-time telemetry.
  */
 export class SimulationEngine {
   private flightModel = new FlightDynamicsModel();
   private engineModel = new Rotax912EngineModel();
   private thermalModel = new Rotax912ThermalModel();
   private sensorModel = new SensorSuiteModel();
+  private reliabilityModel = new ReliabilityModel();
 
   public state: SimulationState;
   public uavPosition: UAVPosition;
@@ -84,6 +86,15 @@ export class SimulationEngine {
     this.thermalModel.oilPressure = 0;
     const initialThermal = this.thermalModel.update(0.1, initialEngine, initialControls, initialAtmosphere, initialFault);
     const initialSensors = this.sensorModel.processReadings(initialEngine, initialThermal, true, 0);
+    const initialReliability = this.reliabilityModel.calculate(
+      initialEngine,
+      initialThermal,
+      initialFault,
+      initialFlight,
+      MISSION_WAYPOINTS,
+      0,
+      false
+    );
 
     this.state = {
       isRunning: true,
@@ -100,6 +111,7 @@ export class SimulationEngine {
       thermal: initialThermal,
       sensors: initialSensors,
       fault: initialFault,
+      reliability: initialReliability,
     };
 
     this.uavPosition = {
@@ -256,6 +268,15 @@ export class SimulationEngine {
     this.state.engine = this.engineModel.update(0.1, false, this.state.controls, this.state.atmosphere, this.state.fault, 0);
     this.state.thermal = this.thermalModel.update(0.1, this.state.engine, this.state.controls, this.state.atmosphere, this.state.fault);
     this.state.sensors = this.sensorModel.processReadings(this.state.engine, this.state.thermal, true, 0);
+    this.state.reliability = this.reliabilityModel.calculate(
+      this.state.engine,
+      this.state.thermal,
+      this.state.fault,
+      this.state.flight,
+      MISSION_WAYPOINTS,
+      0,
+      false
+    );
 
     this.uavPosition = {
       lat: 32.5450,
@@ -347,7 +368,18 @@ export class SimulationEngine {
 
     this.state.flightPhase = this.state.flight.flightPhase;
 
-    // 6. Synchronize UAV Position for Map & UI
+    // 6. Mission Reliability & Health Assessment
+    this.state.reliability = this.reliabilityModel.calculate(
+      this.state.engine,
+      this.state.thermal,
+      this.state.fault,
+      this.state.flight,
+      MISSION_WAYPOINTS,
+      this.state.simTimeSeconds,
+      this.state.engineOn
+    );
+
+    // 7. Synchronize UAV Position for Map & UI
     this.uavPosition = {
       lat: this.state.flight.latitude,
       lon: this.state.flight.longitude,
@@ -434,7 +466,16 @@ export class SimulationEngine {
       fault: this.state.fault.activeFault,
       fault_severity: numericSeverity,
       preset: activeFaultLower === 'normal' ? 'nominal' : activeFaultLower,
-      afr: this.state.fault.activeFault === 'FUEL_PRESSURE_DROP' ? 17.2 : 14.7
+      afr: this.state.fault.activeFault === 'FUEL_PRESSURE_DROP' ? 17.2 : 14.7,
+
+      // Mission Reliability & Decision (Digital Twin Integration)
+      mission_reliability: this.state.reliability.reliabilityScore,
+      mission_risk: this.state.reliability.riskLevel,
+      mission_decision: this.state.reliability.decision,
+      soh: this.state.reliability.engineSOH,
+      rul_hours: this.state.reliability.rulHours,
+      terrain_elevation: this.state.reliability.terrainElevationFt,
+      agl_altitude: this.state.reliability.aglAltitudeFt
     };
   }
 }

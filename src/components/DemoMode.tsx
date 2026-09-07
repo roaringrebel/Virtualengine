@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, RotateCcw, CheckCircle2, AlertTriangle, Radio, Activity } from 'lucide-react';
+import { Play, Pause, CheckCircle2, AlertTriangle, ShieldCheck, AlertOctagon } from 'lucide-react';
 
 interface DemoModeProps {
   isDemoRunning: boolean;
@@ -10,14 +10,18 @@ interface DemoModeProps {
 }
 
 export const DEMO_STAGES = [
-  { step: 1, name: 'Engine Startup & Systems Check', desc: 'Ignition ON, Rotax 912 spool to idle (1,600 RPM)' },
-  { step: 2, name: 'Takeoff & Initial Climb', desc: 'Throttle 90%, altitude climb vector to 4,500 ft' },
-  { step: 3, name: 'Waypoint Auto Cruise', desc: 'Navigate waypoint route along river corridor (145 km/h)' },
-  { step: 4, name: 'High Engine Load (85%)', desc: 'Throttle & load increased to simulate heavy mission payload' },
-  { step: 5, name: 'Inject Excessive Vibration', desc: 'Fault injected: high-order vibration > 6.5 mm/s, RPM hunting' },
-  { step: 6, name: 'Aero Drag & Airspeed Sag', desc: 'Available engine power drops ~18%, airspeed decays gradually' },
-  { step: 7, name: 'Stream Telemetry to Website 2', desc: 'Real-time packets dispatch to Digital Twin with fault metadata' },
-  { step: 8, name: 'Fault Clearance & Return to Base', desc: 'Restore normal engine equilibrium, vector back to airfield' }
+  { step: 1, name: '1. UAV at Base Airfield', desc: 'Engine OFF, Standby mode, Mission Decision: GO' },
+  { step: 2, name: '2. Start Engine & Warm-Up', desc: 'Ignition ON, Rotax 912 spools to Idle, oil pressure rises' },
+  { step: 3, name: '3. Throttle 70% Applied', desc: 'Thrust increases, longitudinal acceleration on runway' },
+  { step: 4, name: '4. Takeoff & Climb Phase', desc: 'Airspeed > 110 km/h, positive VSI climb towards 4,500 ft' },
+  { step: 5, name: '5. Waypoint Auto Engaged', desc: 'Autopilot tracks planned route corridor (WP1 -> WP2 -> WP3)' },
+  { step: 6, name: '6. Cruise & Route Progress', desc: 'Airspeed 145 km/h, planned route & cyan track active' },
+  { step: 7, name: '7. Inject Excessive Vibration', desc: 'Fault injected: high-order vibration > 6.5 mm/s RMS' },
+  { step: 8, name: '8. Power Sag & CAUTION', desc: 'Vib ↑, Condition ↓, Reliability 68%, Decision: CAUTION' },
+  { step: 9, name: '9. Severe Anomaly & NO-GO', desc: 'High thermal load, Margin < 0, Decision: NO-GO' },
+  { step: 10, name: '10. Clear Fault & Recovery', desc: 'Thermodynamics restore, Reliability 92%, Decision: GO' },
+  { step: 11, name: '11. Resume Mission Route', desc: 'Waypoint navigation continues towards WP4 Southern Vector' },
+  { step: 12, name: '12. Recovery & Return to Base', desc: 'Mission progress 100%, descent to runway base' }
 ];
 
 export const DemoMode: React.FC<DemoModeProps> = ({
@@ -41,7 +45,7 @@ export const DemoMode: React.FC<DemoModeProps> = ({
             </div>
           </div>
           <span className="text-[8.5px] font-mono font-bold px-1.5 py-0.2 rounded bg-orange-50 text-orange-700 border border-orange-200">
-            DETERMINISTIC
+            12-STAGE SCENARIO
           </span>
         </div>
 
@@ -57,19 +61,19 @@ export const DemoMode: React.FC<DemoModeProps> = ({
           {isDemoRunning ? (
             <>
               <Pause className="w-3 h-3 fill-current" />
-              <span>Stop Demo (Stage {demoStep}/8 — {demoStepRemaining}s)</span>
+              <span>Stop Demo (Stage {demoStep}/12 — {demoStepRemaining}s)</span>
             </>
           ) : (
             <>
               <Play className="w-3 h-3 fill-current" />
-              <span>Run 8-Stage Demo Scenario</span>
+              <span>Run 12-Stage SIH Demo</span>
             </>
           )}
         </button>
       </div>
 
-      {/* 8 Numbered Steps List (Scrollable / Compact) */}
-      <div className="space-y-1 mt-2 max-h-[160px] overflow-y-auto pr-1">
+      {/* 12 Numbered Steps List */}
+      <div className="space-y-1 mt-2 max-h-[175px] overflow-y-auto pr-1">
         {DEMO_STAGES.map((s) => {
           const isActive = isDemoRunning && demoStep === s.step;
           const isDone = isDemoRunning && demoStep > s.step;
