@@ -143,18 +143,30 @@ export class SimulationEngine {
 
     if (key === 'throttle') {
       this.flightModel.throttle = value as number;
-    } else if (key === 'targetHeading' || key === 'heading') {
+    } else if (key === 'targetHeading') {
       this.flightModel.targetHeading = value as number;
       this.state.controls.targetHeading = value as number;
+    } else if (key === 'heading') {
+      this.flightModel.heading = value as number;
+      this.flightModel.targetHeading = value as number;
       this.state.controls.heading = value as number;
-    } else if (key === 'targetAltitude' || key === 'altitude') {
+      this.state.controls.targetHeading = value as number;
+    } else if (key === 'targetAltitude') {
       this.flightModel.targetAltitude = value as number;
       this.state.controls.targetAltitude = value as number;
+    } else if (key === 'altitude') {
+      this.flightModel.altitude = value as number;
+      this.flightModel.targetAltitude = value as number;
       this.state.controls.altitude = value as number;
-    } else if (key === 'targetAirspeed' || key === 'airspeed') {
+      this.state.controls.targetAltitude = value as number;
+    } else if (key === 'targetAirspeed') {
       this.flightModel.targetAirspeed = value as number;
       this.state.controls.targetAirspeed = value as number;
+    } else if (key === 'airspeed') {
+      this.flightModel.airspeed = value as number;
+      this.flightModel.targetAirspeed = value as number;
       this.state.controls.airspeed = value as number;
+      this.state.controls.targetAirspeed = value as number;
     } else if (key === 'navigationMode') {
       this.flightModel.navigationMode = value as any;
     } else if (key === 'windSpeed') {
@@ -204,8 +216,34 @@ export class SimulationEngine {
       latitude: 32.5450,
       longitude: 77.2150,
       heading: 270,
-      altitude: 8000,
-      airspeed: 145
+      altitude: 0,
+      airspeed: 0
+    };
+
+    this.state.flight = {
+      latitude: 32.5450,
+      longitude: 77.2150,
+      altitude: 0,
+      heading: 270,
+      airspeed: 0,
+      groundSpeed: 0,
+      verticalSpeed: 0,
+      groundTrack: 270,
+      targetHeading: 270,
+      targetAltitude: 8000,
+      targetAirspeed: 145,
+      throttle: 70,
+      engineLoad: 70,
+      flightPhase: 'STANDBY',
+      windSpeed: 12,
+      windDirection: 240,
+      currentWaypointIndex: 0,
+      currentWaypointName: MISSION_WAYPOINTS[0].name,
+      distanceToWaypointKm: 0,
+      bearingToWaypointDeg: 270,
+      missionProgressPercent: 0,
+      turnRateDegPerSec: 0,
+      bankAngleDeg: 0,
     };
 
     this.clearFault();
@@ -231,6 +269,21 @@ export class SimulationEngine {
     const effectiveDt = dtSeconds * this.state.speedMultiplier;
     this.state.simTimeSeconds += effectiveDt;
     this.state.fault.elapsedSeconds += effectiveDt;
+
+    // 0. Dynamic Engine Load Calculation
+    if (!this.state.engineOn) {
+      this.state.controls.engineLoad = 0;
+      this.flightModel.engineLoad = 0;
+    } else {
+      const throttleFactor = (this.flightModel.throttle / 100.0) * 60.0;
+      const vzFactor = Math.max(-15.0, Math.min(25.0, (this.flightModel.verticalSpeed / 1200.0) * 25.0));
+      const speedDiff = (this.flightModel.targetAirspeed - this.flightModel.airspeed) / 60.0;
+      const accelFactor = Math.max(-10.0, Math.min(15.0, speedDiff * 12.0));
+      const calculatedLoad = Math.max(10.0, Math.min(100.0, throttleFactor + vzFactor + accelFactor + 10.0));
+      
+      this.state.controls.engineLoad = Math.round(calculatedLoad);
+      this.flightModel.engineLoad = Math.round(calculatedLoad);
+    }
 
     // 1. Atmosphere Physics Calculation
     this.state.atmosphere = calculateAtmosphere(

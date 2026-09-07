@@ -183,21 +183,21 @@ export class FlightDynamicsModel {
       }
     } else {
       const altDiff = this.targetAltitude - this.altitude;
-      const powerRatio = Math.max(0.2, Math.min(1.1, enginePowerHp / 100.0));
+      const powerRatio = Math.max(0.4, Math.min(1.2, enginePowerHp / 70.0));
 
       let desiredVzFpm = 0;
       if (altDiff > 10) {
-        // Climb: restricted by available power
-        desiredVzFpm = Math.min(this.maxClimbRateFpm * powerRatio, altDiff * 5.0);
+        // Climb: bounded by maximum climb rate (approx 5-7 m/s -> 1000-1400 ft/min)
+        desiredVzFpm = Math.min(this.maxClimbRateFpm * powerRatio, Math.max(250, altDiff * 0.8));
       } else if (altDiff < -10) {
         // Descent: standard rate
-        desiredVzFpm = Math.max(-this.maxDescentRateFpm, altDiff * 4.5);
+        desiredVzFpm = Math.max(-this.maxDescentRateFpm, Math.min(-250, altDiff * 0.8));
       } else {
         desiredVzFpm = 0;
       }
 
       // First-order vertical speed lag
-      const vzTau = 1.1; // seconds
+      const vzTau = 0.8; // seconds
       this.verticalSpeed += (desiredVzFpm - this.verticalSpeed) * (1.0 - Math.exp(-dt / vzTau));
       this.altitude = Math.max(0, this.altitude + (this.verticalSpeed / 60.0) * dt);
     }

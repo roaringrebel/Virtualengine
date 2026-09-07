@@ -237,23 +237,17 @@ export const FlightControls: React.FC<FlightControlsProps> = ({
           </div>
         </div>
 
-        {/* 6. ENGINE LOAD & AMBIENT TEMP */}
-        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100">
-          {/* Engine Load */}
-          <div className="flex items-center gap-1.5">
-            <Cpu className="w-3 h-3 text-[#F97316] flex-shrink-0" />
-            <span className="text-[9.5px] font-semibold text-[#4B5563] truncate">Load:</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={controls.engineLoad}
-              disabled={!engineOn}
-              onChange={(e) => onChangeControl('engineLoad', Number(e.target.value))}
-              className="w-full cursor-pointer accent-[#F97316] h-1"
-            />
-            <span className="text-[9.5px] font-mono font-bold text-[#1F2937]">{controls.engineLoad}%</span>
+        {/* 6. ENGINE LOAD (READ-ONLY DERIVED) & AMBIENT TEMP SLIDER */}
+        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 items-center">
+          {/* Engine Load (Calculated from Physics) */}
+          <div className="flex items-center justify-between bg-gray-50 border border-gray-200 px-2 py-1 rounded">
+            <div className="flex items-center gap-1.5">
+              <Cpu className="w-3 h-3 text-[#F97316] flex-shrink-0" />
+              <span className="text-[9.5px] font-semibold text-[#4B5563]">ENGINE LOAD:</span>
+            </div>
+            <span className="text-[10px] font-mono font-bold text-[#1F2937]">
+              {engineOn ? (flight?.engineLoad ?? controls.engineLoad ?? 70) : 0}%
+            </span>
           </div>
 
           {/* Ambient Temp */}
@@ -266,7 +260,6 @@ export const FlightControls: React.FC<FlightControlsProps> = ({
               max={50}
               step={1}
               value={controls.ambientTemp}
-              disabled={!engineOn}
               onChange={(e) => onChangeControl('ambientTemp', Number(e.target.value))}
               className="w-full cursor-pointer accent-[#F97316] h-1"
             />
