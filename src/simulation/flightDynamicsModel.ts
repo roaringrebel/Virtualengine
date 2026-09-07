@@ -235,22 +235,21 @@ export class FlightDynamicsModel {
       turbSpeed = Math.sin(simTime * 0.35) * 1.2;
     }
 
-    // 7. Geodetic Coordinate Propagation (Local Earth Equations)
+    // 7. Geodetic Coordinate Propagation (Authoritative Reduced-Order Earth Equations)
     if (engineOn && this.groundSpeed > 1.0) {
       const distanceMovedMeters = groundSpeedMs * dt;
       const effectiveHeadingRad = ((this.groundTrack + turbHeading) * Math.PI) / 180.0;
 
-      const deltaLat = (distanceMovedMeters * Math.cos(effectiveHeadingRad)) / 111139.0;
+      // North & East velocity vectors
+      const northDistance = distanceMovedMeters * Math.cos(effectiveHeadingRad);
+      const eastDistance = distanceMovedMeters * Math.sin(effectiveHeadingRad);
+
+      const metersPerDegreeLatitude = 111320.0;
       const currentLatRad = (this.latitude * Math.PI) / 180.0;
-      const deltaLon = (distanceMovedMeters * Math.sin(effectiveHeadingRad)) / (111139.0 * Math.max(0.1, Math.cos(currentLatRad)));
+      const metersPerDegreeLongitude = 111320.0 * Math.max(0.01, Math.cos(currentLatRad));
 
-      this.latitude += deltaLat;
-      this.longitude += deltaLon;
-
-      if (this.latitude > 32.610) this.latitude = 32.490;
-      if (this.latitude < 32.490) this.latitude = 32.610;
-      if (this.longitude > 77.290) this.longitude = 77.140;
-      if (this.longitude < 77.140) this.longitude = 77.290;
+      this.latitude += northDistance / metersPerDegreeLatitude;
+      this.longitude += eastDistance / metersPerDegreeLongitude;
     }
 
     // 8. Deterministic Flight Phase Logic
