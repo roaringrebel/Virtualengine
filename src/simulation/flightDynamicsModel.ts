@@ -3,12 +3,12 @@ import { Waypoint } from '../types/mission';
 import { SIMULATION_CONFIG } from './simulationConfig';
 
 export const MISSION_WAYPOINTS: Waypoint[] = [
-  { id: 'base', name: 'HOME / AIRBASE — RUNWAY', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 0, type: 'BASE', description: 'Home airbase runway departure & touchdown point' },
-  { id: 'wp1', name: 'WP1 — CLIMB OUT CORRIDOR', lat: 32.5420, lon: 77.2050, altitudeFt: 4500, targetAirspeedKmh: 130, type: 'TAKEOFF', description: 'Departure climb out vector along river corridor' },
-  { id: 'wp2', name: 'WP2 — SECTOR ALPHA RECON', lat: 32.5650, lon: 77.2280, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Highland tactical surveillance sector' },
-  { id: 'wp3', name: 'WP3 — NORTH PERIMETER', lat: 32.5780, lon: 77.2550, altitudeFt: 8000, targetAirspeedKmh: 150, type: 'SURVEILLANCE', description: 'Tactical patrol boundary point' },
-  { id: 'wp4', name: 'WP4 — DESCENT TO APPROACH', lat: 32.5480, lon: 77.2420, altitudeFt: 3500, targetAirspeedKmh: 125, type: 'RETURN', description: 'Descent to recovery approach corridor' },
-  { id: 'base_return', name: 'BASE — RECOVERY TERMINAL', lat: 32.5280, lon: 77.1850, altitudeFt: 0, targetAirspeedKmh: 75, type: 'BASE', description: 'Home runway terminal recovery' },
+  { id: 'home', name: 'HOME / AIRBASE', lat: 32.5450, lon: 77.2150, altitudeFt: 0, targetAirspeedKmh: 0, type: 'BASE', description: 'Simulated home airfield base' },
+  { id: 'wp1', name: 'WP1 — MOUNTAIN PASS', lat: 32.5650, lon: 77.2500, altitudeFt: 4500, targetAirspeedKmh: 135, type: 'CLIMB', description: 'Initial climb corridor through eastern valley' },
+  { id: 'wp2', name: 'WP2 — NORTH HIGHLANDS', lat: 32.5900, lon: 77.3000, altitudeFt: 8000, targetAirspeedKmh: 145, type: 'SURVEILLANCE', description: 'Highland tactical surveillance sector' },
+  { id: 'wp3', name: 'WP3 — EAST PERIMETER', lat: 32.5700, lon: 77.3500, altitudeFt: 8000, targetAirspeedKmh: 150, type: 'SURVEILLANCE', description: 'Eastern reconnaissance perimeter' },
+  { id: 'wp4', name: 'WP4 — SOUTHERN VECTOR', lat: 32.5300, lon: 77.3200, altitudeFt: 3500, targetAirspeedKmh: 130, type: 'RETURN', description: 'Recovery approach vector to home base' },
+  { id: 'home_rtb', name: 'HOME — RECOVERY', lat: 32.5450, lon: 77.2150, altitudeFt: 0, targetAirspeedKmh: 75, type: 'BASE', description: 'Runway touchdown and recovery' },
 ];
 
 /**

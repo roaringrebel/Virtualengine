@@ -1,18 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
+import L from 'leaflet';
 import * as THREE from 'three';
 import { 
   MapPin, 
   Plus, 
   Minus, 
   Plane, 
-  Eye, 
   Layers, 
   Crosshair, 
-  Video, 
-  RotateCcw, 
   Navigation,
   Compass,
-  Wind
+  Wind,
+  RotateCcw,
+  LocateFixed
 } from 'lucide-react';
 import { FlightPhase, FlightState } from '../types/simulation';
 import { UAVPosition } from '../types/mission';
@@ -26,542 +26,408 @@ interface MissionMapProps {
 }
 
 export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase, engineOn, flight }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Camera & View modes
-  const [viewMode, setViewMode] = useState<'chase' | 'flir' | 'terrain' | 'top'>('chase');
-  const [mapStyle, setMapStyle] = useState<'satellite' | 'flir' | 'wireframe'>('satellite');
-  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const threeContainerRef = useRef<HTMLDivElement>(null);
 
-  // Three.js object references
+  // View Mode: 'map' (Leaflet Geographic Map) | '3d' (3D Tactical UAV View)
+  const [activeView, setActiveView] = useState<'map' | '3d'>('map');
+  const [mapStyle, setMapStyle] = useState<'osm' | 'satellite' | 'dark'>('dark');
+  const [followUav, setFollowUav] = useState<boolean>(true);
+
+  // Leaflet references
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const uavMarkerRef = useRef<L.Marker | null>(null);
+  const plannedRouteLineRef = useRef<L.Polyline | null>(null);
+  const actualTrackLineRef = useRef<L.Polyline | null>(null);
+  const waypointMarkersRef = useRef<L.Marker[]>([]);
+  const baseTileLayerRef = useRef<L.TileLayer | null>(null);
+  const actualTrackPointsRef = useRef<[number, number][]>([]);
+  const lastTrackAppendPosRef = useRef<[number, number]>([uavPosition.lat, uavPosition.lon]);
+
+  // Three.js references (for 3D Tactical Mode)
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const uavGroupRef = useRef<THREE.Group | null>(null);
   const propellerRef = useRef<THREE.Group | null>(null);
-  const propBlurDiscRef = useRef<THREE.Mesh | null>(null);
-  const groundMeshRef = useRef<THREE.Mesh | null>(null);
-  const shadowMeshRef = useRef<THREE.Mesh | null>(null);
-  const historyPathLineRef = useRef<THREE.Line | null>(null);
-  const forwardVectorLineRef = useRef<THREE.Line | null>(null);
-  const groundTrackVectorLineRef = useRef<THREE.Line | null>(null);
-  const waypointCorridorLineRef = useRef<THREE.Line | null>(null);
-  const satelliteTextureRef = useRef<THREE.Texture | null>(null);
 
-  // Interactive camera orbit state
-  const isMouseDownRef = useRef(false);
-  const mousePosRef = useRef({ x: 0, y: 0 });
-  const orbitAngleRef = useRef({ theta: 0.05, phi: 0.35, distance: 58 });
-  const zoomFactorRef = useRef(1.0);
-
-  // Flight history breadcrumbs buffer
-  const historyPointsRef = useRef<THREE.Vector3[]>([]);
-  const lastHeadingRef = useRef<number>(uavPosition.heading);
-  const currentBankRef = useRef<number>(0);
-
-  // Keep a persistent ref to the latest state so the 60fps animation loop never tears down
-  const liveStateRef = useRef({
+  // Keep a persistent ref to the latest state so high-frequency animations do not re-render React
+  const stateRef = useRef({
     uavPosition,
     flightPhase,
     engineOn,
     flight,
-    viewMode,
-    zoomLevel
+    followUav
   });
 
   useEffect(() => {
-    liveStateRef.current = {
+    stateRef.current = {
       uavPosition,
       flightPhase,
       engineOn,
       flight,
-      viewMode,
-      zoomLevel
+      followUav
     };
-  }, [uavPosition, flightPhase, engineOn, flight, viewMode, zoomLevel]);
+  }, [uavPosition, flightPhase, engineOn, flight, followUav]);
 
-  // Coordinate mapper: Converts GPS (Lat, Lon, Alt) to 3D Space Coordinates (X, Y, Z)
-  const gpsTo3D = (lat: number, lon: number, altFt: number): THREE.Vector3 => {
-    const centerLat = 32.5450;
-    const centerLon = 77.2150;
-    const x = (lon - centerLon) * 11500;
-    const z = -(lat - centerLat) * 11500;
-    const y = Math.max(3.0, (altFt / 8000) * 48 + 6.0);
-    return new THREE.Vector3(x, y, z);
+  // Tile layer URLs
+  const TILE_LAYERS = {
+    dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    osm: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
   };
 
-  // Synchronize zoom factor ref
+  // --------------------------------------------------------------------------
+  // 1. INITIALIZE LEAFLET GEOGRAPHIC MAP (Runs ONCE on mount)
+  // --------------------------------------------------------------------------
   useEffect(() => {
-    zoomFactorRef.current = zoomLevel;
-  }, [zoomLevel]);
+    if (!mapContainerRef.current) return;
+    if (mapInstanceRef.current) return; // Prevent recreation
 
-  // Handle Zoom In / Out / Reset
-  const handleZoomIn = () => {
-    setZoomLevel(prev => Math.max(0.4, +(prev - 0.15).toFixed(2)));
-  };
+    const centerLat = 32.5550;
+    const centerLon = 77.2600;
 
-  const handleZoomOut = () => {
-    setZoomLevel(prev => Math.min(2.4, +(prev + 0.15).toFixed(2)));
-  };
+    // Create Map
+    const map = L.map(mapContainerRef.current, {
+      center: [centerLat, centerLon],
+      zoom: 12,
+      zoomControl: false,
+      attributionControl: false
+    });
+    mapInstanceRef.current = map;
 
-  const handleResetCamera = () => {
-    orbitAngleRef.current = { theta: 0.05, phi: 0.35, distance: 58 };
-    setZoomLevel(1.0);
-    setViewMode('chase');
-  };
+    // Add Base Tile Layer
+    const tileLayer = L.tileLayer(TILE_LAYERS[mapStyle], {
+      maxZoom: 18,
+      subdomains: 'abcd'
+    }).addTo(map);
+    baseTileLayerRef.current = tileLayer;
 
-  // Initialize Three.js Scene (Runs Once on Mount)
+    // Create Planned Route Polyline
+    const routeCoords: [number, number][] = MISSION_WAYPOINTS.map(wp => [wp.lat, wp.lon]);
+    // Connect back to home base to close loop
+    if (routeCoords.length > 0) {
+      routeCoords.push([MISSION_WAYPOINTS[0].lat, MISSION_WAYPOINTS[0].lon]);
+    }
+
+    const plannedLine = L.polyline(routeCoords, {
+      color: '#F97316',
+      weight: 2.5,
+      opacity: 0.85,
+      dashArray: '6, 6',
+      lineCap: 'round'
+    }).addTo(map);
+    plannedRouteLineRef.current = plannedLine;
+
+    // Create Actual Travelled Track Polyline
+    actualTrackPointsRef.current = [[uavPosition.lat, uavPosition.lon]];
+    const actualLine = L.polyline(actualTrackPointsRef.current, {
+      color: '#06B6D4',
+      weight: 3.5,
+      opacity: 0.95,
+      lineCap: 'round'
+    }).addTo(map);
+    actualTrackLineRef.current = actualLine;
+
+    // Add Waypoint Markers
+    MISSION_WAYPOINTS.forEach((wp, idx) => {
+      const isBase = wp.type === 'BASE';
+      const wpIcon = L.divIcon({
+        className: 'custom-wp-icon',
+        html: `
+          <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transform: translate(-50%, -50%);
+            pointer-events: auto;
+          ">
+            <div style="
+              width: 22px;
+              height: 22px;
+              border-radius: 50%;
+              background: ${isBase ? '#10B981' : '#F97316'};
+              border: 2px solid #FFFFFF;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: #FFFFFF;
+              font-family: monospace;
+              font-size: 10px;
+              font-weight: 800;
+            ">
+              ${isBase ? 'H' : idx}
+            </div>
+            <div style="
+              background: rgba(15, 23, 42, 0.85);
+              color: #F8FAFC;
+              padding: 1px 5px;
+              border-radius: 4px;
+              font-family: sans-serif;
+              font-size: 8.5px;
+              font-weight: bold;
+              white-space: nowrap;
+              margin-top: 2px;
+              border: 1px solid rgba(255,255,255,0.15);
+            ">
+              ${wp.name.split('—')[0].trim()} (${wp.altitudeFt}ft)
+            </div>
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+
+      const marker = L.marker([wp.lat, wp.lon], { icon: wpIcon }).addTo(map);
+      marker.bindPopup(`
+        <div style="font-family: sans-serif; font-size: 11px;">
+          <strong style="color: #F97316;">${wp.name}</strong><br/>
+          <span style="color: #64748B;">Target Alt:</span> <b>${wp.altitudeFt} ft</b><br/>
+          <span style="color: #64748B;">Target Speed:</span> <b>${wp.targetAirspeedKmh} km/h</b><br/>
+          <span style="color: #94A3B8; font-size: 9.5px;">${wp.description}</span>
+        </div>
+      `);
+      waypointMarkersRef.current.push(marker);
+    });
+
+    // Create UAV Marker (Custom SVG MALE UAV with smooth heading rotation)
+    const createUavIconHtml = (hdg: number) => `
+      <div id="uav-map-icon-wrapper" style="
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      ">
+        <div style="
+          width: 36px;
+          height: 36px;
+          transform: rotate(${hdg}deg);
+          transition: transform 0.15s ease-out;
+          filter: drop-shadow(0 3px 6px rgba(0,0,0,0.6));
+        ">
+          <svg viewBox="0 0 100 100" style="width: 100%; height: 100%;">
+            <!-- Wings -->
+            <polygon points="50,15 10,65 20,72 50,48 80,72 90,65" fill="#F97316" stroke="#FFFFFF" stroke-width="2.5" />
+            <!-- Fuselage -->
+            <ellipse cx="50" cy="50" rx="9" ry="38" fill="#1E293B" stroke="#F97316" stroke-width="2.5" />
+            <!-- Nose Cone -->
+            <polygon points="50,10 43,26 57,26" fill="#EA580C" />
+            <!-- Tail Wing -->
+            <polygon points="50,75 35,92 65,92" fill="#334155" stroke="#FFFFFF" stroke-width="1.5" />
+            <!-- Center Engine/Antenna Dot -->
+            <circle cx="50" cy="45" r="4" fill="#06B6D4" stroke="#FFFFFF" stroke-width="1" />
+          </svg>
+        </div>
+      </div>
+    `;
+
+    const uavIcon = L.divIcon({
+      className: 'custom-uav-marker',
+      html: createUavIconHtml(uavPosition.heading),
+      iconSize: [44, 44],
+      iconAnchor: [22, 22]
+    });
+
+    const uavMarker = L.marker([uavPosition.lat, uavPosition.lon], {
+      icon: uavIcon,
+      zIndexOffset: 1000
+    }).addTo(map);
+    uavMarkerRef.current = uavMarker;
+
+    // Invalidate map size to ensure full bounds render cleanly
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 200);
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, []);
+
+  // --------------------------------------------------------------------------
+  // 2. SWITCH MAP TILE STYLE
+  // --------------------------------------------------------------------------
   useEffect(() => {
-    if (!containerRef.current) return;
-    const container = containerRef.current;
+    if (!mapInstanceRef.current || !baseTileLayerRef.current) return;
+    baseTileLayerRef.current.setUrl(TILE_LAYERS[mapStyle]);
+  }, [mapStyle]);
+
+  // --------------------------------------------------------------------------
+  // 3. CONTINUOUS SMOOTH MARKER & TRACK UPDATE (Zero Shaking Interpolation)
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!mapInstanceRef.current || !uavMarkerRef.current) return;
+
+    const currentLat = uavPosition.lat;
+    const currentLon = uavPosition.lon;
+    const currentHdg = uavPosition.heading;
+
+    // Update marker position
+    uavMarkerRef.current.setLatLng([currentLat, currentLon]);
+
+    // Update heading rotation cleanly on DOM element
+    const iconWrapper = document.getElementById('uav-map-icon-wrapper');
+    if (iconWrapper && iconWrapper.firstElementChild) {
+      (iconWrapper.firstElementChild as HTMLElement).style.transform = `rotate(${currentHdg}deg)`;
+    }
+
+    // Append to actual track polyline if moved >= 15 meters
+    const lastPos = lastTrackAppendPosRef.current;
+    const dLatM = (currentLat - lastPos[0]) * 111139;
+    const dLonM = (currentLon - lastPos[1]) * 111139 * Math.cos((currentLat * Math.PI) / 180);
+    const distMovedM = Math.hypot(dLatM, dLonM);
+
+    if (distMovedM >= 15 && engineOn) {
+      lastTrackAppendPosRef.current = [currentLat, currentLon];
+      actualTrackPointsRef.current.push([currentLat, currentLon]);
+      if (actualTrackPointsRef.current.length > 800) {
+        actualTrackPointsRef.current.shift();
+      }
+      if (actualTrackLineRef.current) {
+        actualTrackLineRef.current.setLatLngs(actualTrackPointsRef.current);
+      }
+    }
+
+    // Smooth camera panning (Only when follow UAV is enabled and aircraft leaves center region)
+    if (followUav && mapInstanceRef.current) {
+      const map = mapInstanceRef.current;
+      const center = map.getCenter();
+      const centerDistM = Math.hypot((currentLat - center.lat) * 111139, (currentLon - center.lng) * 111139 * Math.cos((center.lat * Math.PI) / 180));
+      
+      // Pan gently only when UAV drifts > 600m from viewport center to prevent jitter
+      if (centerDistM > 600) {
+        map.panTo([currentLat, currentLon], { animate: true, duration: 0.8 });
+      }
+    }
+  }, [uavPosition.lat, uavPosition.lon, uavPosition.heading, engineOn, followUav]);
+
+  // --------------------------------------------------------------------------
+  // 4. THREE.JS 3D TACTICAL VIEW INITIALIZATION (For 3D View Mode)
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (activeView !== '3d' || !threeContainerRef.current) return;
+    const container = threeContainerRef.current;
     const width = container.clientWidth || 750;
     const height = container.clientHeight || 350;
 
-    // 1. Scene & Atmosphere
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0e1726);
-    scene.fog = new THREE.FogExp2(0x1a283e, 0.0012);
+    scene.background = new THREE.Color(0x0a111e);
+    scene.fog = new THREE.FogExp2(0x0a111e, 0.0015);
     sceneRef.current = scene;
 
-    // 2. Camera Setup
-    const camera = new THREE.PerspectiveCamera(46, width / height, 1, 6000);
-    camera.position.set(0, 30, 65);
+    const camera = new THREE.PerspectiveCamera(46, width / height, 1, 3000);
+    camera.position.set(0, 22, 48);
     cameraRef.current = camera;
 
-    // 3. WebGL Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.3;
+    renderer.toneMappingExposure = 1.2;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // 4. Photorealistic Atmospheric Natural Daylight
-    const ambientLight = new THREE.AmbientLight(0xdce7f5, 1.4);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfffaed, 2.8);
-    sunLight.position.set(220, 450, 180);
-    sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
-    sunLight.shadow.camera.near = 10;
-    sunLight.shadow.camera.far = 1800;
-    sunLight.shadow.camera.left = -400;
-    sunLight.shadow.camera.right = 400;
-    sunLight.shadow.camera.top = 400;
-    sunLight.shadow.camera.bottom = -400;
-    sunLight.shadow.bias = -0.0002;
+    const sunLight = new THREE.DirectionalLight(0xffecd2, 2.4);
+    sunLight.position.set(100, 200, 100);
     scene.add(sunLight);
 
-    const skyFill = new THREE.DirectionalLight(0x7dd3fc, 0.9);
-    skyFill.position.set(-200, 200, -200);
-    scene.add(skyFill);
+    // Terrain grid
+    const grid = new THREE.GridHelper(1000, 50, 0x06b6d4, 0x1e293b);
+    grid.position.y = 0;
+    scene.add(grid);
 
-    // 5. Aerial Satellite Terrain Ground Plane
-    const textureLoader = new THREE.TextureLoader();
-    const satTexture = textureLoader.load(
-      '/terrain_satellite.jpg',
-      (tex) => {
-        tex.wrapS = THREE.ClampToEdgeWrapping;
-        tex.wrapT = THREE.ClampToEdgeWrapping;
-        tex.generateMipmaps = true;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        if (renderer.capabilities.getMaxAnisotropy) {
-          tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-        }
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.needsUpdate = true;
-      }
-    );
-    satelliteTextureRef.current = satTexture;
-
-    const groundGeo = new THREE.PlaneGeometry(1200, 1200, 128, 128);
-    groundGeo.rotateX(-Math.PI / 2);
-
-    const posAttr = groundGeo.attributes.position;
-    const v3 = new THREE.Vector3();
-    for (let i = 0; i < posAttr.count; i++) {
-      v3.fromBufferAttribute(posAttr, i);
-      const distFromCenter = Math.sqrt(v3.x * v3.x + v3.z * v3.z);
-      const riverDepression = Math.sin(v3.x * 0.008 + 0.5) * Math.cos(v3.z * 0.006) * 8;
-      const hills = Math.sin(v3.x * 0.015) * Math.cos(v3.z * 0.012) * 12;
-      const falloff = Math.max(0, 1 - (distFromCenter / 700));
-      posAttr.setY(i, (riverDepression + hills) * falloff);
-    }
-    groundGeo.computeVertexNormals();
-
-    const groundMat = new THREE.MeshStandardMaterial({
-      map: satTexture,
-      roughness: 0.85,
-      metalness: 0.1,
-    });
-    const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-    groundMesh.position.y = 0;
-    groundMesh.receiveShadow = true;
-    scene.add(groundMesh);
-    groundMeshRef.current = groundMesh;
-
-    // Ground Shadow
-    const shadowGeo = new THREE.PlaneGeometry(28, 18);
-    shadowGeo.rotateX(-Math.PI / 2);
-    const shadowMat = new THREE.MeshBasicMaterial({
-      color: 0x050c17,
-      transparent: true,
-      opacity: 0.38,
-      depthWrite: false
-    });
-    const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
-    shadowMesh.position.y = 1.2;
-    scene.add(shadowMesh);
-    shadowMeshRef.current = shadowMesh;
-
-    // 6. Planned Mission Route Corridor
-    const wp3DPoints = MISSION_WAYPOINTS.map(wp => gpsTo3D(wp.lat, wp.lon, wp.altitudeFt));
-    const wpGeo = new THREE.BufferGeometry().setFromPoints(wp3DPoints);
-    const wpMat = new THREE.LineDashedMaterial({
-      color: 0x38bdf8,
-      dashSize: 8,
-      gapSize: 4,
-      linewidth: 2,
-      transparent: true,
-      opacity: 0.65
-    });
-    const wpLine = new THREE.Line(wpGeo, wpMat);
-    wpLine.computeLineDistances();
-    scene.add(wpLine);
-    waypointCorridorLineRef.current = wpLine;
-
-    // Traveled Flight History Line
-    const historyGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)]);
-    const historyMat = new THREE.LineBasicMaterial({
-      color: 0xf97316,
-      linewidth: 3,
-      transparent: true,
-      opacity: 0.9
-    });
-    const historyLine = new THREE.Line(historyGeo, historyMat);
-    scene.add(historyLine);
-    historyPathLineRef.current = historyLine;
-
-    // Projected Forward Heading Vector Line
-    const forwardGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -40)]);
-    const forwardMat = new THREE.LineDashedMaterial({
-      color: 0x22c55e,
-      dashSize: 4,
-      gapSize: 2,
-      linewidth: 2
-    });
-    const forwardLine = new THREE.Line(forwardGeo, forwardMat);
-    scene.add(forwardLine);
-    forwardVectorLineRef.current = forwardLine;
-
-    // 7. ROTAX 912 MALE UAV Drone 3D Model
+    // Build 3D MALE UAV Model
     const uavGroup = new THREE.Group();
 
-    const militaryGrayMat = new THREE.MeshStandardMaterial({
-      color: 0xecf0f5,
-      roughness: 0.28,
-      metalness: 0.72,
-    });
-    const darkCompositeMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.35,
-      metalness: 0.85,
-    });
-    const orangeAccentsMat = new THREE.MeshStandardMaterial({
-      color: 0xf97316,
-      roughness: 0.2,
-      metalness: 0.7,
-    });
-
     // Fuselage
-    const fuseGeo = new THREE.CylinderGeometry(1.3, 1.7, 19, 18);
+    const fuseGeo = new THREE.ConeGeometry(2.4, 22, 16);
     fuseGeo.rotateX(Math.PI / 2);
-    const fuselage = new THREE.Mesh(fuseGeo, militaryGrayMat);
-    fuselage.castShadow = true;
+    const fuseMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.7 });
+    const fuselage = new THREE.Mesh(fuseGeo, fuseMat);
     uavGroup.add(fuselage);
 
-    // SATCOM Dome
-    const satcomGeo = new THREE.SphereGeometry(1.7, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-    satcomGeo.rotateX(-Math.PI / 2);
-    const satcomDome = new THREE.Mesh(satcomGeo, militaryGrayMat);
-    satcomDome.position.set(0, 1.0, 4.8);
-    satcomDome.scale.set(0.9, 0.75, 1.9);
-    satcomDome.castShadow = true;
-    uavGroup.add(satcomDome);
-
-    // Nose Cone
-    const noseGeo = new THREE.ConeGeometry(1.3, 3.8, 16);
-    noseGeo.rotateX(Math.PI / 2);
-    const nose = new THREE.Mesh(noseGeo, militaryGrayMat);
-    nose.position.set(0, 0, 11.4);
-    nose.castShadow = true;
-    uavGroup.add(nose);
-
-    // EO/IR Gimbal Turret
-    const turretBaseGeo = new THREE.CylinderGeometry(0.85, 0.85, 0.5, 12);
-    const turretBase = new THREE.Mesh(turretBaseGeo, darkCompositeMat);
-    turretBase.position.set(0, -1.4, 8.2);
-    uavGroup.add(turretBase);
-
-    const turretBallGeo = new THREE.SphereGeometry(0.8, 16, 16);
-    const turretBall = new THREE.Mesh(turretBallGeo, darkCompositeMat);
-    turretBall.position.set(0, -1.9, 8.2);
-    turretBall.castShadow = true;
-    uavGroup.add(turretBall);
-
     // Wings
-    const wingGeo = new THREE.BoxGeometry(58, 0.38, 3.6);
-    const wings = new THREE.Mesh(wingGeo, militaryGrayMat);
-    wings.position.set(0, 0.5, 0.6);
-    wings.castShadow = true;
+    const wingGeo = new THREE.BoxGeometry(38, 0.4, 3.8);
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4, metalness: 0.6 });
+    const wings = new THREE.Mesh(wingGeo, wingMat);
+    wings.position.set(0, 0.6, -1.0);
     uavGroup.add(wings);
 
-    // Wingtips & Winglets
-    const tipLGeo = new THREE.BoxGeometry(4.0, 0.39, 3.62);
-    const tipL = new THREE.Mesh(tipLGeo, orangeAccentsMat);
-    tipL.position.set(-27.0, 0.5, 0.6);
-    const tipR = new THREE.Mesh(tipLGeo, orangeAccentsMat);
-    tipR.position.set(27.0, 0.5, 0.6);
-    uavGroup.add(tipL);
-    uavGroup.add(tipR);
+    // V-Tail
+    const tailLGeo = new THREE.BoxGeometry(1.2, 7, 0.3);
+    tailLGeo.rotateZ(Math.PI / 4);
+    const tailMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
+    const tailL = new THREE.Mesh(tailLGeo, tailMat);
+    tailL.position.set(-2.5, 3.2, 9.5);
+    uavGroup.add(tailL);
 
-    // Tail Booms & Inverted V-Tail
-    const boomGeo = new THREE.CylinderGeometry(0.32, 0.32, 17, 8);
-    boomGeo.rotateX(Math.PI / 2);
-    const boomL = new THREE.Mesh(boomGeo, militaryGrayMat);
-    boomL.position.set(-6.6, 0.4, -8.0);
-    const boomR = new THREE.Mesh(boomGeo, militaryGrayMat);
-    boomR.position.set(6.6, 0.4, -8.0);
-    uavGroup.add(boomL);
-    uavGroup.add(boomR);
+    const tailRGeo = new THREE.BoxGeometry(1.2, 7, 0.3);
+    tailRGeo.rotateZ(-Math.PI / 4);
+    const tailR = new THREE.Mesh(tailRGeo, tailMat);
+    tailR.position.set(2.5, 3.2, 9.5);
+    uavGroup.add(tailR);
 
-    const vTailGeo = new THREE.BoxGeometry(11.5, 0.28, 2.8);
-    const vTailL = new THREE.Mesh(vTailGeo, militaryGrayMat);
-    vTailL.position.set(-3.4, -1.9, -16.5);
-    vTailL.rotation.z = 0.58;
-    const vTailR = new THREE.Mesh(vTailGeo, militaryGrayMat);
-    vTailR.position.set(3.4, -1.9, -16.5);
-    vTailR.rotation.z = -0.58;
-    uavGroup.add(vTailL);
-    uavGroup.add(vTailR);
-
-    // Rotax 912 Nacelle & Pusher Propeller
-    const engineCowlGeo = new THREE.CylinderGeometry(1.35, 1.5, 4.6, 16);
-    engineCowlGeo.rotateX(Math.PI / 2);
-    const engineCowl = new THREE.Mesh(engineCowlGeo, darkCompositeMat);
-    engineCowl.position.set(0, 0.55, -9.0);
-    engineCowl.castShadow = true;
-    uavGroup.add(engineCowl);
-
+    // Pusher Propeller
     const propGroup = new THREE.Group();
-    propGroup.position.set(0, 0.55, -11.5);
-
-    const spinnerGeo = new THREE.ConeGeometry(0.6, 1.2, 12);
-    spinnerGeo.rotateX(-Math.PI / 2);
-    const spinnerMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2 });
-    const spinner = new THREE.Mesh(spinnerGeo, spinnerMat);
-    propGroup.add(spinner);
-
-    const bladeGeo = new THREE.BoxGeometry(0.35, 4.4, 0.08);
-    const bladeMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3 });
-    const pTipGeo = new THREE.BoxGeometry(0.36, 0.85, 0.09);
-
-    for (let b = 0; b < 3; b++) {
-      const bladeContainer = new THREE.Group();
-      bladeContainer.rotation.z = (b * Math.PI * 2) / 3;
-
-      const blade = new THREE.Mesh(bladeGeo, bladeMat);
-      blade.position.y = 2.2;
-      bladeContainer.add(blade);
-
-      const propTip = new THREE.Mesh(pTipGeo, orangeAccentsMat);
-      propTip.position.y = 4.0;
-      bladeContainer.add(propTip);
-
-      propGroup.add(bladeContainer);
-    }
+    const bladeGeo = new THREE.BoxGeometry(0.3, 5.2, 0.15);
+    const bladeMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b });
+    const blade1 = new THREE.Mesh(bladeGeo, bladeMat);
+    const blade2 = new THREE.Mesh(bladeGeo, bladeMat);
+    blade2.rotation.z = Math.PI / 2;
+    propGroup.add(blade1, blade2);
+    propGroup.position.set(0, 0, 11.2);
     uavGroup.add(propGroup);
     propellerRef.current = propGroup;
 
-    // Prop blur disc
-    const blurGeo = new THREE.CircleGeometry(4.4, 32);
-    const blurMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.0, side: THREE.DoubleSide });
-    const propBlur = new THREE.Mesh(blurGeo, blurMat);
-    propBlur.position.set(0, 0.55, -11.6);
-    uavGroup.add(propBlur);
-    propBlurDiscRef.current = propBlur;
-
-    uavGroup.scale.setScalar(0.75);
+    uavGroup.position.set(0, 12, 0);
     scene.add(uavGroup);
     uavGroupRef.current = uavGroup;
 
-    // 8. Continuous 60FPS Render & Tracking Loop (Single Persistent Loop)
+    // 3D Animation Loop
     let animId: number;
-    let propSpin = 0;
-    let lastTime = performance.now();
+    const animate3D = () => {
+      animId = requestAnimationFrame(animate3D);
+      const isEngineRunning = stateRef.current.engineOn;
 
-    const animate = (now: number) => {
-      const dt = Math.min(0.1, (now - lastTime) / 1000);
-      lastTime = now;
-
-      const state = liveStateRef.current;
-      const currentPos = state.uavPosition;
-      const isEngineActive = state.engineOn;
-      const currentFlight = state.flight;
-
-      // 1. Calculate Exact 3D Position from True Geospatial Coordinates
-      const current3DPos = gpsTo3D(currentPos.lat, currentPos.lon, isEngineActive ? currentPos.altitude : 0);
-
-      // 2. Propeller Spin
-      if (propellerRef.current) {
-        if (isEngineActive) {
-          propSpin += 0.85;
-          propellerRef.current.rotation.z = propSpin;
-          if (propBlurDiscRef.current) {
-            (propBlurDiscRef.current.material as THREE.MeshBasicMaterial).opacity = 0.28;
-          }
-        } else {
-          if (propBlurDiscRef.current) {
-            (propBlurDiscRef.current.material as THREE.MeshBasicMaterial).opacity = 0.0;
-          }
-        }
+      if (propellerRef.current && isEngineRunning) {
+        propellerRef.current.rotation.z += 0.45;
       }
 
-      // 3. Position & Orient UAV in 3D Space
-      if (uavGroupRef.current) {
-        if (isEngineActive) {
-          const turbulenceY = Math.sin(now * 0.004) * 0.35 + Math.cos(now * 0.007) * 0.2;
-          const turbulenceRoll = Math.sin(now * 0.003) * 0.02;
+      if (uavGroupRef.current && cameraRef.current) {
+        const hdgRad = ((stateRef.current.uavPosition.heading) * Math.PI) / 180;
+        uavGroupRef.current.rotation.y = -hdgRad + Math.PI;
 
-          uavGroupRef.current.position.lerp(
-            new THREE.Vector3(current3DPos.x, current3DPos.y + turbulenceY, current3DPos.z),
-            0.25
-          );
+        // Smooth bank
+        const bank = (stateRef.current.flight?.bankAngleDeg || 0) * (Math.PI / 180);
+        uavGroupRef.current.rotation.z = bank;
 
-          // Calculate Dynamic Heading Angle (in radians)
-          const targetHeadingRad = -(currentPos.heading * Math.PI) / 180 + Math.PI;
-
-          // Dynamic Banking
-          let headingDelta = currentPos.heading - lastHeadingRef.current;
-          if (headingDelta > 180) headingDelta -= 360;
-          if (headingDelta < -180) headingDelta += 360;
-          lastHeadingRef.current = currentPos.heading;
-
-          const targetBank = THREE.MathUtils.clamp(-headingDelta * 0.35, -0.45, 0.45);
-          currentBankRef.current = THREE.MathUtils.lerp(currentBankRef.current, targetBank, 0.1);
-
-          uavGroupRef.current.rotation.set(0, 0, 0);
-          uavGroupRef.current.rotation.y = targetHeadingRad;
-          uavGroupRef.current.rotation.z = currentBankRef.current + turbulenceRoll;
-
-          // Shadow
-          if (shadowMeshRef.current) {
-            shadowMeshRef.current.position.set(current3DPos.x, 1.2, current3DPos.z);
-            shadowMeshRef.current.rotation.y = targetHeadingRad;
-            shadowMeshRef.current.scale.setScalar(1 + (current3DPos.y / 80));
-          }
-
-          // Traveled Flight Ribbon Breadcrumbs
-          if (historyPointsRef.current.length === 0 || historyPointsRef.current[historyPointsRef.current.length - 1].distanceTo(current3DPos) > 3.5) {
-            historyPointsRef.current.push(current3DPos.clone());
-            if (historyPointsRef.current.length > 300) {
-              historyPointsRef.current.shift();
-            }
-            if (historyPathLineRef.current && historyPointsRef.current.length >= 2) {
-              historyPathLineRef.current.geometry.setFromPoints(historyPointsRef.current);
-              historyPathLineRef.current.computeLineDistances();
-            }
-          }
-
-          // Forward Heading Vector Line
-          if (forwardVectorLineRef.current) {
-            const forwardLen = 60;
-            const headingRad = (currentPos.heading * Math.PI) / 180;
-            const forwardTarget = current3DPos.clone().add(new THREE.Vector3(
-              Math.sin(headingRad) * forwardLen,
-              0,
-              -Math.cos(headingRad) * forwardLen
-            ));
-            forwardVectorLineRef.current.geometry.setFromPoints([current3DPos, forwardTarget]);
-            forwardVectorLineRef.current.computeLineDistances();
-          }
-
-        } else {
-          uavGroupRef.current.position.lerp(current3DPos, 0.25);
-          uavGroupRef.current.rotation.set(0, -(currentPos.heading * Math.PI) / 180 + Math.PI, 0);
-          if (shadowMeshRef.current) {
-            shadowMeshRef.current.position.set(current3DPos.x, 1.2, current3DPos.z);
-          }
-        }
-
-        // 4. Dynamic Camera Tracking Modes
-        if (cameraRef.current) {
-          const uavPos = uavGroupRef.current.position;
-          const currentZoom = zoomFactorRef.current;
-          const mode = state.viewMode;
-
-          if (mode === 'chase') {
-            const headingRad = (currentPos.heading * Math.PI) / 180;
-            const chaseDist = (isEngineActive ? 58 : 48) * currentZoom;
-            const chaseHeight = (isEngineActive ? 22 : 16) * currentZoom;
-
-            // Camera smoothly locks behind the UAV following its true heading
-            const camX = uavPos.x - Math.sin(headingRad) * chaseDist;
-            const camZ = uavPos.z + Math.cos(headingRad) * chaseDist;
-            const camY = uavPos.y + chaseHeight;
-
-            cameraRef.current.position.lerp(new THREE.Vector3(camX, camY, camZ), 0.12);
-            cameraRef.current.lookAt(uavPos.x, uavPos.y + 2.5, uavPos.z);
-          } else if (mode === 'flir') {
-            const headingRad = uavGroupRef.current.rotation.y;
-            const noseOffset = new THREE.Vector3(0, -1.5, 9.5).applyAxisAngle(new THREE.Vector3(0, 1, 0), headingRad);
-            cameraRef.current.position.copy(uavPos).add(noseOffset);
-            
-            const forwardLook = uavPos.clone().add(
-              new THREE.Vector3(
-                -Math.sin(headingRad) * 200,
-                -30,
-                -Math.cos(headingRad) * 200
-              )
-            );
-            cameraRef.current.lookAt(forwardLook);
-          } else if (mode === 'terrain') {
-            const orbitRadius = 190 * currentZoom;
-            const camX = uavPos.x + Math.sin(orbitAngleRef.current.theta) * orbitRadius;
-            const camZ = uavPos.z + Math.cos(orbitAngleRef.current.theta) * orbitRadius;
-            const camY = Math.max(40, uavPos.y + Math.sin(orbitAngleRef.current.phi) * orbitRadius + 45);
-
-            cameraRef.current.position.lerp(new THREE.Vector3(camX, camY, camZ), 0.09);
-            cameraRef.current.lookAt(uavPos.x, uavPos.y + 4, uavPos.z);
-          } else if (mode === 'top') {
-            const topHeight = 380 * currentZoom;
-            cameraRef.current.position.lerp(new THREE.Vector3(uavPos.x, topHeight, uavPos.z), 0.12);
-            cameraRef.current.lookAt(uavPos.x, 0, uavPos.z);
-          }
-        }
+        // Chase camera behind UAV
+        const camDistance = 38;
+        const camHeight = 16;
+        const targetX = uavGroupRef.current.position.x + Math.sin(hdgRad) * camDistance;
+        const targetZ = uavGroupRef.current.position.z + Math.cos(hdgRad) * camDistance;
+        cameraRef.current.position.set(targetX, camHeight, targetZ);
+        cameraRef.current.lookAt(uavGroupRef.current.position);
       }
 
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
-      }
-
-      animId = requestAnimationFrame(animate);
+      renderer.render(scene, camera);
     };
 
-    animId = requestAnimationFrame(animate);
+    animate3D();
 
-    // Resize handler
     const handleResize = () => {
-      if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
-      const w = containerRef.current.clientWidth || 750;
-      const h = containerRef.current.clientHeight || 350;
+      if (!container || !cameraRef.current || !rendererRef.current) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
@@ -571,233 +437,217 @@ export const MissionMap: React.FC<MissionMapProps> = ({ uavPosition, flightPhase
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
+      renderer.dispose();
     };
-  }, []);
+  }, [activeView]);
 
-  // Map Style update
-  useEffect(() => {
-    if (!groundMeshRef.current || !sceneRef.current) return;
-    const groundMat = groundMeshRef.current.material as THREE.MeshStandardMaterial;
-
-    if (mapStyle === 'wireframe') {
-      groundMat.wireframe = true;
-      groundMat.map = null;
-      groundMat.color.setHex(0x0ea5e9);
-      sceneRef.current.background = new THREE.Color(0x040d1a);
-      if (sceneRef.current.fog) sceneRef.current.fog.color.setHex(0x040d1a);
-    } else if (mapStyle === 'flir') {
-      groundMat.wireframe = false;
-      groundMat.map = satelliteTextureRef.current;
-      groundMat.color.setHex(0x34d399);
-      sceneRef.current.background = new THREE.Color(0x022c22);
-      if (sceneRef.current.fog) sceneRef.current.fog.color.setHex(0x022c22);
-    } else {
-      groundMat.wireframe = false;
-      groundMat.map = satelliteTextureRef.current;
-      groundMat.color.setHex(0xffffff);
-      sceneRef.current.background = new THREE.Color(0x0e1726);
-      if (sceneRef.current.fog) sceneRef.current.fog.color.setHex(0x1a283e);
+  // Recenter map on UAV
+  const handleRecenter = () => {
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView([uavPosition.lat, uavPosition.lon], 13, { animate: true });
     }
-    groundMat.needsUpdate = true;
-  }, [mapStyle]);
+  };
+
+  const currentWp = MISSION_WAYPOINTS[uavPosition.currentWaypointIndex] || MISSION_WAYPOINTS[0];
+  const verticalSpeedFpm = flight?.verticalSpeed ?? 0;
+  const verticalSpeedMs = (verticalSpeedFpm * 0.00508).toFixed(1);
+  const groundTrackDeg = flight?.groundTrack ?? uavPosition.heading;
+  const groundSpeedKmh = flight?.groundSpeed ?? uavPosition.airspeed;
 
   return (
-    <div className="bg-white rounded-xl border border-[#E5E7EB] p-3 shadow-sm relative overflow-hidden flex flex-col h-full select-none">
+    <div className="bg-white rounded-xl border border-[#E5E7EB] p-3.5 shadow-sm flex flex-col justify-between h-full select-none overflow-hidden">
       
-      {/* Header Bar */}
-      <div className="flex items-center justify-between mb-2 z-10 flex-wrap gap-2">
+      {/* 1. Header Bar */}
+      <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-md bg-orange-50 border border-orange-200 flex items-center justify-center text-[#F97316]">
-            <MapPin className="w-3.5 h-3.5" />
+            <Navigation className="w-3.5 h-3.5" />
           </div>
           <div>
-            <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase">MISSION MAP — SIMULATED POSITION & FLIGHT TRACK</h2>
-            <div className="text-[10px] text-[#6B7280]">Continuous Geodesic Kinematics | Rotax 912 MALE UAV Drone</div>
+            <h2 className="text-xs font-bold text-[#1F2937] tracking-tight uppercase">
+              MISSION MAP — VIRTUAL MALE UAV
+            </h2>
+            <div className="text-[10px] text-[#6B7280]">
+              Simulated Geographic Position & Mission Track
+            </div>
           </div>
         </div>
 
-        {/* View Mode Switcher */}
-        <div className="flex items-center gap-1 bg-[#F9FAFB] border border-[#E5E7EB] p-0.5 rounded-lg text-[9px] font-bold">
+        {/* View Mode & Map Controls */}
+        <div className="flex items-center gap-1.5 text-xs">
+          {/* Mode Switcher: Geographic Map vs 3D View */}
+          <div className="flex items-center bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB] text-[10px] font-bold">
+            <button
+              onClick={() => setActiveView('map')}
+              className={`px-2.5 py-1 rounded-md transition-all ${
+                activeView === 'map'
+                  ? 'bg-white text-[#F97316] shadow-xs'
+                  : 'text-[#6B7280] hover:text-[#1F2937]'
+              }`}
+            >
+              Geographic Map
+            </button>
+            <button
+              onClick={() => setActiveView('3d')}
+              className={`px-2.5 py-1 rounded-md transition-all ${
+                activeView === '3d'
+                  ? 'bg-white text-[#F97316] shadow-xs'
+                  : 'text-[#6B7280] hover:text-[#1F2937]'
+              }`}
+            >
+              3D Tactical View
+            </button>
+          </div>
+
+          {/* Map Layer Style (When in Map View) */}
+          {activeView === 'map' && (
+            <div className="flex items-center bg-[#F3F4F6] p-0.5 rounded-lg border border-[#E5E7EB] text-[10px] font-semibold">
+              <button
+                onClick={() => setMapStyle('dark')}
+                className={`px-2 py-1 rounded-md ${mapStyle === 'dark' ? 'bg-[#1E293B] text-white' : 'text-[#6B7280]'}`}
+              >
+                Tactical Dark
+              </button>
+              <button
+                onClick={() => setMapStyle('satellite')}
+                className={`px-2 py-1 rounded-md ${mapStyle === 'satellite' ? 'bg-[#1E293B] text-white' : 'text-[#6B7280]'}`}
+              >
+                Satellite
+              </button>
+              <button
+                onClick={() => setMapStyle('osm')}
+                className={`px-2 py-1 rounded-md ${mapStyle === 'osm' ? 'bg-[#1E293B] text-white' : 'text-[#6B7280]'}`}
+              >
+                Street
+              </button>
+            </div>
+          )}
+
+          {/* Follow UAV Toggle */}
           <button
-            onClick={() => setViewMode('chase')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded transition-all ${
-              viewMode === 'chase' ? 'bg-[#F97316] text-white shadow-xs' : 'text-[#4B5563] hover:text-black'
+            onClick={() => setFollowUav(!followUav)}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+              followUav
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                : 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200'
             }`}
+            title="Auto-pan map with UAV"
           >
-            <Video className="w-3 h-3" />
-            <span>Chase 3D</span>
+            <LocateFixed className="w-3 h-3" />
+            <span>Follow UAV: {followUav ? 'ON' : 'OFF'}</span>
           </button>
+
+          {/* Recenter Button */}
           <button
-            onClick={() => setViewMode('flir')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded transition-all ${
-              viewMode === 'flir' ? 'bg-[#F97316] text-white shadow-xs' : 'text-[#4B5563] hover:text-black'
-            }`}
+            onClick={handleRecenter}
+            className="p-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300"
+            title="Recenter map on UAV position"
           >
-            <Crosshair className="w-3 h-3" />
-            <span>Nose FLIR</span>
-          </button>
-          <button
-            onClick={() => setViewMode('terrain')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded transition-all ${
-              viewMode === 'terrain' ? 'bg-[#F97316] text-white shadow-xs' : 'text-[#4B5563] hover:text-black'
-            }`}
-          >
-            <Eye className="w-3 h-3" />
-            <span>Terrain 3D</span>
-          </button>
-          <button
-            onClick={() => setViewMode('top')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded transition-all ${
-              viewMode === 'top' ? 'bg-[#F97316] text-white shadow-xs' : 'text-[#4B5563] hover:text-black'
-            }`}
-          >
-            <Layers className="w-3 h-3" />
-            <span>Top Down</span>
+            <Crosshair className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* 3D WebGL Canvas Viewport Area */}
-      <div className="relative flex-1 w-full min-h-[330px] rounded-lg overflow-hidden border border-[#CBD5E1] bg-[#0E1726]">
+      {/* 2. Main Map / 3D Canvas Area */}
+      <div className="relative w-full h-[330px] rounded-xl overflow-hidden border border-[#E5E7EB] bg-[#0F172A]">
         
-        {/* 3D Canvas Element */}
-        <div ref={containerRef} className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing" />
+        {/* Leaflet 2D Map Container */}
+        <div
+          ref={mapContainerRef}
+          className={`w-full h-full ${activeView === 'map' ? 'block' : 'hidden'}`}
+          style={{ background: '#0F172A' }}
+        />
 
-        {/* 1. TOP AEROSPACE COMPASS TAPE */}
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded px-3 py-0.5 text-white font-mono text-[9px] shadow-lg z-20 flex items-center gap-3 pointer-events-none">
-          <span className="text-slate-400">S</span>
-          <span className="text-slate-500">210</span>
-          <span className="text-slate-400">SW</span>
-          <span className="text-slate-500">240</span>
-          <div className="flex flex-col items-center">
-            <span className="text-[#F97316] font-bold text-xs">▼ {uavPosition.heading}°</span>
-          </div>
-          <span className="text-slate-500">300</span>
-          <span className="text-slate-400">NW</span>
-          <span className="text-slate-500">330</span>
-          <span className="text-slate-400">N</span>
-        </div>
+        {/* Three.js 3D Container */}
+        {activeView === '3d' && (
+          <div
+            ref={threeContainerRef}
+            className="w-full h-full block"
+          />
+        )}
 
-        {/* 2. TOP-LEFT CLEAN AEROSPACE TELEMETRY HUD */}
-        <div className="absolute top-2.5 left-2.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-lg p-2.5 text-white font-mono text-[8.5px] space-y-1 shadow-xl z-20 pointer-events-none min-w-[190px]">
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>AIRCRAFT</span>
-            <strong className="text-[#F97316]">ROTAX 912 MALE UAV</strong>
+        {/* Top-Left Telemetry Overlay HUD (Truthful, Aerospace Engineering Readouts) */}
+        <div className="absolute top-2.5 left-2.5 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1">
+          <div className="text-[10px] font-bold text-[#F97316] uppercase tracking-wider flex items-center justify-between gap-4 border-b border-slate-800 pb-1">
+            <span>VIRTUAL MALE UAV</span>
+            <span className="text-[8.5px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              {flightPhase}
+            </span>
           </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>SIMULATED POSITION</span>
-            <strong className="text-white">{uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E</strong>
-          </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>ALTITUDE</span>
-            <strong className="text-orange-400">
+
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-0.5">
+            <div className="text-slate-400">POSITION:</div>
+            <div className="text-right text-cyan-300 font-bold">
+              {uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E
+            </div>
+
+            <div className="text-slate-400">ALTITUDE:</div>
+            <div className="text-right text-orange-400 font-bold">
               {engineOn ? uavPosition.altitude.toLocaleString() : 0} ft
-              {flight && flight.verticalSpeed !== 0 && (
-                <span className={`ml-1 text-[7.5px] ${flight.verticalSpeed > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  ({flight.verticalSpeed > 0 ? `+${flight.verticalSpeed}` : flight.verticalSpeed} fpm)
-                </span>
-              )}
-            </strong>
-          </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>AIRSPEED / GS</span>
-            <strong className="text-emerald-400">
-              {engineOn ? uavPosition.airspeed : 0} / {engineOn && flight ? flight.groundSpeed : 0} km/h
-            </strong>
-          </div>
-          <div className="flex justify-between gap-3 text-slate-400">
-            <span>HEADING / TRACK</span>
-            <strong className="text-cyan-400">
-              {uavPosition.heading}° / {flight?.groundTrack ?? uavPosition.heading}°
-            </strong>
-          </div>
-          {flight && (
-            <div className="flex justify-between gap-3 text-slate-400 border-t border-slate-800 pt-1">
-              <span>WIND VECTOR</span>
-              <strong className="text-blue-300">{flight.windSpeed} km/h from {flight.windDirection}°</strong>
             </div>
-          )}
-          {flight && flight.currentWaypointName && (
-            <div className="flex justify-between gap-3 text-slate-400">
-              <span>TARGET WAYPOINT</span>
-              <strong className="text-amber-300 truncate max-w-[110px]">{flight.currentWaypointName}</strong>
+
+            <div className="text-slate-400">AIRSPEED:</div>
+            <div className="text-right text-emerald-400 font-bold">
+              {engineOn ? uavPosition.airspeed : 0} km/h
             </div>
-          )}
-        </div>
 
-        {/* 3. LEFT FLOATING ZOOM & CAMERA CONTROL DOCK */}
-        <div className="absolute left-2.5 bottom-12 flex flex-col gap-1.5 z-20">
-          <button
-            onClick={handleZoomIn}
-            title="Zoom In"
-            className="w-7 h-7 rounded bg-slate-900/85 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-700 flex items-center justify-center shadow-md transition-all active:scale-95"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleZoomOut}
-            title="Zoom Out"
-            className="w-7 h-7 rounded bg-slate-900/85 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-700 flex items-center justify-center shadow-md transition-all active:scale-95"
-          >
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleResetCamera}
-            title="Reset Camera View"
-            className="w-7 h-7 rounded bg-slate-900/85 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-700 flex items-center justify-center shadow-md transition-all active:scale-95"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* 4. RIGHT FLOATING TERRAIN STYLE SWITCHER */}
-        <div className="absolute right-2.5 top-2.5 flex flex-col items-end gap-1 z-20">
-          <div className="flex bg-slate-900/85 border border-slate-700/80 rounded p-0.5 text-[8.5px] font-semibold text-slate-200 backdrop-blur-md">
-            <button
-              onClick={() => setMapStyle('satellite')}
-              className={`px-2 py-0.5 rounded transition-all ${mapStyle === 'satellite' ? 'bg-[#F97316] text-white font-bold' : 'hover:text-white'}`}
-            >
-              Satellite
-            </button>
-            <button
-              onClick={() => setMapStyle('flir')}
-              className={`px-2 py-0.5 rounded transition-all ${mapStyle === 'flir' ? 'bg-[#F97316] text-white font-bold' : 'hover:text-white'}`}
-            >
-              FLIR Night
-            </button>
-            <button
-              onClick={() => setMapStyle('wireframe')}
-              className={`px-2 py-0.5 rounded transition-all ${mapStyle === 'wireframe' ? 'bg-[#F97316] text-white font-bold' : 'hover:text-white'}`}
-            >
-              Wireframe
-            </button>
-          </div>
-        </div>
-
-        {/* 5. BOTTOM-CENTER FLIGHT PHASE & MISSION PROGRESS */}
-        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-lg px-3 py-1.5 min-w-[220px] text-white shadow-xl z-20 pointer-events-none">
-          <div className="flex items-center justify-between text-xs mb-1">
-            <div className="flex items-center gap-1.5 text-slate-400 text-[9px] font-medium uppercase">
-              <Plane className="w-3 h-3 text-[#F97316]" />
-              <span>FLIGHT PHASE</span>
+            <div className="text-slate-400">GROUND SPEED:</div>
+            <div className="text-right text-emerald-300 font-bold">
+              {engineOn ? groundSpeedKmh : 0} km/h
             </div>
-            <span className="font-bold text-[10px] tracking-wider text-emerald-400">{flightPhase}</span>
-          </div>
 
-          <div className="space-y-0.5">
-            <div className="flex justify-between text-[8px] font-mono text-slate-300">
-              <span>Mission Progress</span>
-              <strong className="text-[#F97316]">{Math.round(uavPosition.missionProgressPercent)}%</strong>
+            <div className="text-slate-400">HEADING / TRK:</div>
+            <div className="text-right text-white font-bold">
+              {uavPosition.heading}° / {groundTrackDeg}°
             </div>
-            <div className="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-orange-400 to-[#F97316] h-full rounded-full transition-all duration-300"
-                style={{ width: `${uavPosition.missionProgressPercent}%` }}
-              />
+
+            <div className="text-slate-400">VSI:</div>
+            <div className="text-right text-slate-200">
+              {Number(verticalSpeedMs) >= 0 ? `+${verticalSpeedMs}` : verticalSpeedMs} m/s
             </div>
           </div>
         </div>
 
+        {/* Top-Right Waypoint & Route Info Overlay */}
+        <div className="absolute top-2.5 right-2.5 bg-slate-950/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-2.5 text-white font-mono text-[9.5px] shadow-lg pointer-events-none z-[500] space-y-1">
+          <div className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider border-b border-slate-800 pb-1 flex items-center justify-between gap-3">
+            <span>MISSION ROUTE</span>
+            <span className="text-orange-400">{uavPosition.missionProgressPercent}%</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5 text-[9px]">
+            <div className="text-slate-400">TARGET WP:</div>
+            <div className="text-right text-amber-300 font-bold truncate max-w-[120px]">
+              {currentWp.name.split('—')[0]}
+            </div>
+
+            <div className="text-slate-400">DISTANCE:</div>
+            <div className="text-right text-white font-bold">
+              {uavPosition.distanceToNextKm} km
+            </div>
+
+            <div className="text-slate-400">BEARING:</div>
+            <div className="text-right text-cyan-300 font-bold">
+              {flight?.bearingToWaypointDeg ?? uavPosition.heading}°
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Legend */}
+        <div className="absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-xs border border-slate-800 px-2.5 py-1 rounded-md text-[8.5px] font-mono text-slate-300 flex items-center gap-3 z-[500]">
+          <div className="flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-[#F97316] inline-block border-t border-dashed border-[#F97316]" />
+            <span>Planned Route</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-3 h-1 bg-[#06B6D4] inline-block rounded-full" />
+            <span>Travelled Track</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-[#10B981] inline-block" />
+            <span>Home Base</span>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -68,18 +68,25 @@ export const App: React.FC = () => {
     setEventLogs(prev => [...prev, { id: `${Date.now()}-${Math.random()}`, simTimestamp: timeStr, message, category }]);
   };
 
-  // Main 30Hz Simulation Loop
+  // Main Physics Simulation Loop (30-60Hz physics with throttled 10Hz React UI publishing)
   useEffect(() => {
-    let lastTime = performance.now();
+    let lastPhysicsTime = performance.now();
+    let lastUiPublishTime = performance.now();
     let frameId: number;
 
     const tick = (now: number) => {
-      const dt = Math.min(0.1, (now - lastTime) / 1000);
-      lastTime = now;
+      const dt = Math.min(0.1, (now - lastPhysicsTime) / 1000);
+      lastPhysicsTime = now;
 
+      // 1. High-frequency physical integration step (30-60 Hz)
       simRef.current.update(dt);
-      setSimState({ ...simRef.current.state });
-      setUavPos({ ...simRef.current.uavPosition });
+
+      // 2. Throttled UI State Publication (10 Hz = 100ms interval)
+      if (now - lastUiPublishTime >= 100) {
+        lastUiPublishTime = now;
+        setSimState({ ...simRef.current.state });
+        setUavPos({ ...simRef.current.uavPosition });
+      }
 
       frameId = requestAnimationFrame(tick);
     };
@@ -181,12 +188,14 @@ export const App: React.FC = () => {
   // Handlers for Engine & Simulation Controls
   const handleStartEngine = () => {
     simRef.current.setEngineOn(true);
+    setSimState({ ...simRef.current.state });
     addEventLog('ENGINE START: Ignition ON, Rotax 912 ULS aero-piston running', 'ENGINE');
   };
 
   const handleStopEngine = () => {
     simRef.current.setEngineOn(false);
     if (isDemoRunning) setIsDemoRunning(false);
+    setSimState({ ...simRef.current.state });
     addEventLog('ENGINE STOP: Ignition CUTOFF, engine spooled down to Standby (0 RPM)', 'ENGINE');
   };
 
@@ -213,15 +222,18 @@ export const App: React.FC = () => {
 
   const handleChangeControl = <K extends keyof SimulationState['controls']>(key: K, value: SimulationState['controls'][K]) => {
     simRef.current.setControl(key, value);
+    setSimState({ ...simRef.current.state });
   };
 
   const handleInjectFault = (fault: FaultType, severity: FaultSeverity) => {
     simRef.current.setFault(fault, severity);
+    setSimState({ ...simRef.current.state });
     addEventLog(`Fault Injected: ${fault} (Severity: ${severity})`, 'FAULT');
   };
 
   const handleClearFault = () => {
     simRef.current.clearFault();
+    setSimState({ ...simRef.current.state });
     addEventLog('Fault Cleared. System restored to NORMAL equilibrium.', 'INFO');
   };
 
