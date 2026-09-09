@@ -113,16 +113,66 @@ export const App: React.FC = () => {
   }, []);
 
   const completionLoggedRef = useRef(false);
+  const recoveryLoggedRef = useRef(false);
+  const persistenceLoggedRef = useRef(false);
+  const lastLoggedPhaseRef = useRef<string>('');
 
-  // Monitor Destination Reached / Mission Completed
+  // Comprehensive Mission Lifecycle & State Transition Event Logger
   useEffect(() => {
-    if (simState.isCompleted && !completionLoggedRef.current) {
+    const phase = simState.flightPhase;
+    if (phase !== lastLoggedPhaseRef.current && phase !== 'PARKED' && phase !== 'STANDBY') {
+      lastLoggedPhaseRef.current = phase;
+      if (phase === 'STARTUP') {
+        addEventLog('Engine startup sequence initiated: Cranking starter motor', 'ENGINE');
+      } else if (phase === 'TAKEOFF') {
+        addEventLog('Takeoff roll active: Ground speed accelerating along runway', 'FLIGHT');
+      } else if (phase === 'CLIMB') {
+        addEventLog('Positive climb established: Ascending to tactical cruise altitude', 'FLIGHT');
+      } else if (phase === 'CRUISE') {
+        addEventLog('UAV stabilized at cruise altitude (6,500 ft, 145 km/h TAS)', 'FLIGHT');
+      } else if (phase === 'DESCENT') {
+        addEventLog('Descent initiated: Controlled altitude stepdown toward destination corridor', 'FLIGHT');
+      } else if (phase === 'APPROACH') {
+        addEventLog(`Approach pattern active: Sequencing alignment with ${currentDestination.name}`, 'FLIGHT');
+      } else if (phase === 'LANDING') {
+        addEventLog('Terminal landing flare active: Airspeed reducing to touchdown threshold', 'FLIGHT');
+      } else if (phase === 'EMERGENCY_DIVERT') {
+        const elp = simState.reliability.emergencyRecovery?.selectedELP;
+        addEventLog(`EMERGENCY RECOVERY: Original mission aborted. Diverting to ${elp ? elp.id + ' (' + elp.name + ')' : 'ELP'}`, 'FAULT');
+      } else if (phase === 'RECOVERY_APPROACH') {
+        addEventLog('Emergency approach sector active: Lining up for emergency touchdown', 'FLIGHT');
+      }
+    }
+
+    // Critical Persistence Tracking Logs
+    const critSec = simState.reliability.criticalPersistenceSeconds;
+    if (critSec > 0 && !persistenceLoggedRef.current) {
+      persistenceLoggedRef.current = true;
+      addEventLog('Critical propulsion condition detected: In-flight persistence timer active (0/30s)', 'FAULT');
+    } else if (critSec === 0 && persistenceLoggedRef.current && !simState.reliability.emergencyRecoveryTriggered) {
+      persistenceLoggedRef.current = false;
+      addEventLog('Critical condition cleared: Persistence timer reset to 0/30s', 'INFO');
+    }
+
+    // Emergency Recovery Triggered
+    if (simState.reliability.emergencyRecoveryTriggered && !recoveryLoggedRef.current) {
+      recoveryLoggedRef.current = true;
+      addEventLog('CRITICAL PERSISTENCE (30/30 sec) EXCEEDED! Emergency Recovery Initiated.', 'FAULT');
+      addEventLog('Evaluating pre-surveyed Emergency Landing Points (ELPs)...', 'MISSION');
+    }
+
+    // Mission Completed Normally
+    if (simState.flightPhase === 'COMPLETED' && !completionLoggedRef.current) {
       completionLoggedRef.current = true;
-      addEventLog(`Destination Reached: ${currentDestination.name}. Mission Completed Successfully!`, 'MISSION');
+      addEventLog(`Destination Reached: ${currentDestination.name}. Safe Landing Completed!`, 'MISSION');
+    } else if (simState.flightPhase === 'RECOVERED' && !completionLoggedRef.current) {
+      completionLoggedRef.current = true;
+      const elp = simState.reliability.emergencyRecovery?.selectedELP;
+      addEventLog(`MISSION RECOVERED: Safe emergency touchdown completed at ${elp ? elp.id + ' (' + elp.name + ')' : 'ELP'}!`, 'MISSION');
     } else if (!simState.isCompleted) {
       completionLoggedRef.current = false;
     }
-  }, [simState.isCompleted, currentDestination.name]);
+  }, [simState.flightPhase, simState.isCompleted, simState.reliability, currentDestination.name]);
 
   // 12-Stage Deterministic SIH Demo Sequence Orchestrator
   useEffect(() => {
@@ -164,7 +214,7 @@ export const App: React.FC = () => {
           } else if (nextStep === 7) {
             setDemoStep(7);
             simRef.current.setFault('EXCESSIVE_VIBRATION', 'MEDIUM');
-            addEventLog('Demo Stage 7: FAULT INJECTED — Excessive Vibration (> 6.5 mm/s RMS)', 'FAULT');
+            addEventLog('Demo Stage 7: FAULT INJECTED — Excessive Vibration (> 0.080 g RMS)', 'FAULT');
             return 8;
           } else if (nextStep === 8) {
             setDemoStep(8);
@@ -392,11 +442,12 @@ export const App: React.FC = () => {
           {/* ============================================================== */}
           {activeTab === 'engine' && (
             <div className="space-y-4">
-              {/* Top: Engine Status Banner & 9 Sensor Grid */}
+              {/* Top: Engine Status Banner, Live Vibration Oscilloscope & 10 Primary Sensor Cards */}
               <EnginePanel
                 engine={simState.engine}
                 sensors={simState.sensors}
                 engineOn={simState.engineOn}
+                liveWaveform={simState.liveWaveform}
                 onStartEngine={handleStartEngine}
                 onStopEngine={handleStopEngine}
               />
@@ -416,6 +467,7 @@ export const App: React.FC = () => {
                     sensors={simState.sensors}
                     engineOn={simState.engineOn}
                     airspeed={simState.flight.airspeed}
+                    history={simState.history}
                   />
                 </div>
               </div>

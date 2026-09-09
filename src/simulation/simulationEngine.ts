@@ -5,7 +5,7 @@ import { SensorSuiteModel } from './sensorModel';
 import { createInitialFaultState, FAULT_DEFINITIONS } from './faultModel';
 import { FlightDynamicsModel, DEFAULT_MISSION_WAYPOINTS, MISSION_WAYPOINTS } from './flightDynamicsModel';
 import { ReliabilityModel } from './reliabilityModel';
-import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, FlightState, SimulationState } from '../types/simulation';
+import { FaultSeverity, FaultType, FlightControlsState, FlightPhase, FlightState, SimulationHistoryPoint, SimulationState } from '../types/simulation';
 import { TelemetryPacket } from '../types/telemetry';
 import { LocationCoord, UAVPosition, Waypoint } from '../types/mission';
 
@@ -13,9 +13,9 @@ export { DEFAULT_MISSION_WAYPOINTS, MISSION_WAYPOINTS };
 
 /**
  * Central Simulation Engine
- * Single source of truth unifying the physics-inspired flight dynamics model,
- * Reduced-Order Rotax 912 ULS engine model, thermodynamics, sensor suite,
- * mission reliability / health assessment, and unified real-time telemetry.
+ * Single authoritative source of truth unifying the physics-inspired flight dynamics model,
+ * Reduced-Order Rotax 912 ULS engine model, 3-axis vibration signal engine,
+ * thermodynamics, sensor suite, mission reliability / health assessment, and telemetry.
  */
 export class SimulationEngine {
   private flightModel = new FlightDynamicsModel();
@@ -26,6 +26,8 @@ export class SimulationEngine {
 
   public state: SimulationState;
   public uavPosition: UAVPosition;
+  private historyBuffer: SimulationHistoryPoint[] = [];
+  private lastHistoryRecordTime: number = 0;
 
   // Synchronization Metadata
   public simulationId: string = `SIM-${Date.now().toString(36).toUpperCase()}`;
@@ -86,7 +88,7 @@ export class SimulationEngine {
     this.thermalModel.oilTemperature = initialControls.ambientTemp;
     this.thermalModel.oilPressure = 0;
     const initialThermal = this.thermalModel.update(0.1, initialEngine, initialControls, initialAtmosphere, initialFault);
-    const initialSensors = this.sensorModel.processReadings(initialEngine, initialThermal, true, 0);
+    const initialSensors = this.sensorModel.processReadings(initialEngine, initialThermal, true, 0, 0);
     const initialReliability = this.reliabilityModel.calculate(
       initialEngine,
       initialThermal,
@@ -115,6 +117,8 @@ export class SimulationEngine {
       sensors: initialSensors,
       fault: initialFault,
       reliability: initialReliability,
+      history: [],
+      liveWaveform: new Array(100).fill(0.001)
     };
 
     this.uavPosition = {
@@ -127,6 +131,9 @@ export class SimulationEngine {
       distanceToNextKm: 0,
       missionProgressPercent: 0,
     };
+
+    // Pre-populate initial history point
+    this.recordHistoryPoint(0);
   }
 
   public setMissionRoute(waypoints: Waypoint[]): void {
@@ -251,6 +258,7 @@ export class SimulationEngine {
 
     this.flightModel.resetToInitialState();
     this.engineModel.reset();
+    this.reliabilityModel.reset();
 
     const startWp = this.flightModel.waypoints[0] || DEFAULT_MISSION_WAYPOINTS[0];
 
@@ -305,7 +313,7 @@ export class SimulationEngine {
     this.thermalModel.oilPressure = 0;
     this.state.engine = this.engineModel.update(0.1, false, this.state.controls, this.state.atmosphere, this.state.fault, 0);
     this.state.thermal = this.thermalModel.update(0.1, this.state.engine, this.state.controls, this.state.atmosphere, this.state.fault);
-    this.state.sensors = this.sensorModel.processReadings(this.state.engine, this.state.thermal, true, 0);
+    this.state.sensors = this.sensorModel.processReadings(this.state.engine, this.state.thermal, true, 0, 0);
     this.state.reliability = this.reliabilityModel.calculate(
       this.state.engine,
       this.state.thermal,
@@ -326,6 +334,9 @@ export class SimulationEngine {
       distanceToNextKm: 0,
       missionProgressPercent: 0,
     };
+
+    this.historyBuffer = [];
+    this.recordHistoryPoint(0);
   }
 
   /**
@@ -359,8 +370,7 @@ export class SimulationEngine {
       this.state.controls.ambientTemp
     );
 
-    // 2. Rotax 912 Engine Physics
-    // Pass current flight airspeed & altitude for accurate cooling & density derating
+    // 2. Rotax 912 Engine Physics & 3-Axis Vibration Simulation
     const engineControlsInput: FlightControlsState = {
       ...this.state.controls,
       airspeed: this.flightModel.airspeed,
@@ -392,7 +402,8 @@ export class SimulationEngine {
       this.state.engine,
       this.state.thermal,
       this.state.sensorNoiseEnabled,
-      this.state.simTimeSeconds
+      this.state.simTimeSeconds,
+      this.state.controls.engineLoad
     );
 
     // 5. Central Flight Dynamics & Geodesic Navigation Engine
@@ -404,15 +415,6 @@ export class SimulationEngine {
       this.state.atmosphere.density
     );
 
-    if (this.flightModel.isCompleted || this.state.flight.isCompleted) {
-      this.state.isCompleted = true;
-      this.state.missionStatus = 'COMPLETED';
-      this.state.flightPhase = 'LANDING';
-    } else {
-      this.state.flightPhase = this.state.flight.flightPhase;
-      this.state.missionStatus = this.state.engineOn ? (this.state.isPaused ? 'PAUSED' : 'IN_PROGRESS') : 'STANDBY';
-    }
-
     // 6. Mission Reliability & Health Assessment
     this.state.reliability = this.reliabilityModel.calculate(
       this.state.engine,
@@ -421,8 +423,31 @@ export class SimulationEngine {
       this.state.flight,
       this.flightModel.waypoints,
       this.state.simTimeSeconds,
-      this.state.engineOn
+      this.state.engineOn,
+      effectiveDt
     );
+
+    // Dynamic In-Flight Emergency Divert Integration
+    if (this.state.reliability.emergencyRecoveryTriggered && !this.flightModel.emergencyDivertActive) {
+      const selectedELP = this.state.reliability.emergencyRecovery?.selectedELP;
+      if (selectedELP) {
+        this.flightModel.activateEmergencyDivert(selectedELP);
+      }
+    }
+
+    if (this.flightModel.isRecovered) {
+      this.state.isCompleted = true;
+      this.state.missionStatus = 'COMPLETED';
+      this.state.flightPhase = 'RECOVERED';
+    } else if (this.flightModel.isCompleted || this.state.flight.isCompleted) {
+      this.state.isCompleted = true;
+      this.state.missionStatus = 'COMPLETED';
+      this.state.flightPhase = this.flightModel.flightPhase === 'LANDING' ? 'LANDING' : 'COMPLETED';
+    } else {
+      this.state.flightPhase = this.state.flight.flightPhase;
+      this.state.missionStatus = this.state.engineOn ? (this.state.isPaused ? 'PAUSED' : 'IN_PROGRESS') : 'STANDBY';
+    }
+
     this.state.reliability.isCompleted = this.state.isCompleted;
     this.state.reliability.missionStatus = this.state.missionStatus;
 
@@ -444,6 +469,43 @@ export class SimulationEngine {
     this.state.controls.heading = this.state.flight.heading;
     this.state.controls.altitude = this.state.flight.altitude;
     this.state.controls.airspeed = this.state.flight.airspeed;
+
+    // 8. Record rolling historical data buffer (every 0.5 sec)
+    if (this.state.simTimeSeconds - this.lastHistoryRecordTime >= 0.5) {
+      this.lastHistoryRecordTime = this.state.simTimeSeconds;
+      this.recordHistoryPoint(this.state.simTimeSeconds);
+    }
+
+    // 9. Update live waveform buffer for real-time visualization
+    this.state.liveWaveform = this.engineModel.vibrationEngine.getLiveWaveformSamples(120);
+  }
+
+  private recordHistoryPoint(simTimeSec: number): void {
+    const point: SimulationHistoryPoint = {
+      timeMs: Date.now(),
+      simTimeSec,
+      rpm: this.state.engine.rpm,
+      cht: this.state.thermal.cht,
+      egt: this.state.thermal.egt,
+      oilPressure: this.state.thermal.oilPressure,
+      oilTemperature: this.state.thermal.oilTemperature,
+      fuelFlow: this.state.engine.fuelFlow,
+      fuelPressure: this.state.engine.fuelPressure,
+      manifoldPressure: this.state.engine.manifoldPressure,
+      engineLoad: this.state.controls.engineLoad,
+      vibrationRmsG: this.state.engine.vibration,
+      vibrationPeakG: this.state.engine.vibrationMetrics?.peakG || 0.001,
+      dominantFreqHz: this.state.engine.vibrationMetrics?.dominantFreqHz || 0,
+      airspeed: this.state.flight.airspeed,
+      altitude: this.state.flight.altitude
+    };
+
+    this.historyBuffer.push(point);
+    const maxHistoryPoints = 120; // 60 seconds at 2Hz sampling
+    if (this.historyBuffer.length > maxHistoryPoints) {
+      this.historyBuffer.shift();
+    }
+    this.state.history = [...this.historyBuffer];
   }
 
   /**
@@ -458,11 +520,19 @@ export class SimulationEngine {
     }
 
     const activeFaultLower = this.state.fault.activeFault.toLowerCase();
+    const vibMetrics = this.state.engine.vibrationMetrics;
+
+    const isAnomaly = this.state.fault.activeFault !== 'NORMAL' ||
+      this.state.engine.vibration > 0.060 ||
+      this.state.thermal.cht > 120 ||
+      this.state.thermal.oilPressure < 2.0;
 
     return {
       timestamp: new Date().toISOString(),
       simulation_id: this.simulationId,
       sequence_number: this.sequenceNumber,
+      uav_id: 'UAV-BHARAT-01',
+      engine_id: 'ENG_001',
       aircraft: 'MALE_UAV',
       engine: 'ROTAX_912_ULS',
       flight_phase: this.state.isCompleted ? 'COMPLETED' : this.state.flightPhase,
@@ -475,12 +545,21 @@ export class SimulationEngine {
       oil_pressure: Number(this.state.thermal.oilPressure.toFixed(2)),
       oil_temperature: Number(this.state.thermal.oilTemperature.toFixed(2)),
       oil_temp: Number(this.state.thermal.oilTemperature.toFixed(2)),
-      vibration: Number(this.state.engine.vibration.toFixed(2)),
+      vibration: Number(this.state.engine.vibration.toFixed(4)),
+      vibration_rms_g: Number(this.state.engine.vibration.toFixed(4)),
+      vibration_peak_g: Number((vibMetrics?.peakG || 0).toFixed(4)),
+      vibration_p2p_g: Number((vibMetrics?.peakToPeakG || 0).toFixed(4)),
+      vibration_crest_factor: Number((vibMetrics?.crestFactor || 0).toFixed(2)),
+      dominant_frequency_hz: Number((vibMetrics?.dominantFreqHz || 0).toFixed(1)),
+      spectral_energy: Number((vibMetrics?.spectralEnergy || 0).toFixed(6)),
+      harmonic_1x_energy: Number((vibMetrics?.harmonic1XEnergy || 0).toFixed(5)),
+      bearing_fault_energy: Number((vibMetrics?.bearingFaultEnergy || 0).toFixed(5)),
       fuel_flow: Number(this.state.engine.fuelFlow.toFixed(2)),
       fuel_pressure: Number(this.state.engine.fuelPressure.toFixed(2)),
       map: Number(this.state.engine.manifoldPressure.toFixed(2)),
       engine_condition: Number(this.state.engine.engineCondition.toFixed(2)),
       engine_status: this.state.engine.status,
+      anomaly_flag: isAnomaly,
 
       // Flight Dynamics & Navigation
       latitude: this.state.flight.latitude,

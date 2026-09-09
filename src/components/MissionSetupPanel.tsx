@@ -216,13 +216,28 @@ export const MissionSetupPanel: React.FC<MissionSetupPanelProps> = ({
     setSearchResult(null);
   };
 
-  // Haversine calculations for active route
-  const currentDistKm = haversineDistanceKm(
-    parseFloat(sourceLat) || currentSource.lat,
-    parseFloat(sourceLon) || currentSource.lon,
-    parseFloat(destLat) || currentDestination.lat,
-    parseFloat(destLon) || currentDestination.lon
-  );
+  // Calculate authoritative route distance across all active waypoints
+  let totalRouteDistKm = 0;
+  if (activeWaypoints && activeWaypoints.length > 1) {
+    for (let i = 0; i < activeWaypoints.length - 1; i++) {
+      totalRouteDistKm += haversineDistanceKm(
+        activeWaypoints[i].lat,
+        activeWaypoints[i].lon,
+        activeWaypoints[i + 1].lat,
+        activeWaypoints[i + 1].lon
+      );
+    }
+  } else {
+    totalRouteDistKm = haversineDistanceKm(
+      parseFloat(sourceLat) || currentSource.lat,
+      parseFloat(sourceLon) || currentSource.lon,
+      parseFloat(destLat) || currentDestination.lat,
+      parseFloat(destLon) || currentDestination.lon
+    );
+  }
+  totalRouteDistKm = Number(Math.max(1.0, totalRouteDistKm).toFixed(2));
+
+  const currentDistKm = totalRouteDistKm;
 
   const currentBearing = initialBearingDeg(
     parseFloat(sourceLat) || currentSource.lat,
@@ -231,7 +246,8 @@ export const MissionSetupPanel: React.FC<MissionSetupPanelProps> = ({
     parseFloat(destLon) || currentDestination.lon
   );
 
-  const estimatedTimeMin = Math.round((currentDistKm / 145.0) * 60);
+  const estimatedTimeMin = Math.max(1, Math.round((currentDistKm / 145.0) * 60));
+  const missionDemandHours = Number((estimatedTimeMin / 60.0).toFixed(2));
 
   const routeStatus = engineOn ? 'ACTIVE' : activeWaypoints.length > 0 ? 'READY' : 'STANDBY';
 
@@ -451,8 +467,8 @@ export const MissionSetupPanel: React.FC<MissionSetupPanelProps> = ({
             <div className="text-lg font-black text-cyan-300">{currentBearing}°</div>
           </div>
           <div>
-            <span className="text-slate-400 text-[10px]">EST. FLIGHT TIME:</span>
-            <div className="font-bold text-white">~{estimatedTimeMin} min</div>
+            <span className="text-slate-400 text-[10px]">EST. FLIGHT TIME / DEMAND:</span>
+            <div className="font-bold text-white">~{estimatedTimeMin} min <span className="text-amber-300 font-mono text-[11px]">({missionDemandHours} h)</span></div>
           </div>
           <div>
             <span className="text-slate-400 text-[10px]">WAYPOINTS:</span>

@@ -68,29 +68,30 @@ export const TelemetryStream: React.FC<TelemetryStreamProps> = ({
   const isConnecting = telemetryStatus.status === 'CONNECTING';
 
   const sampleJson = latestPacket ? JSON.stringify({
+    uav_id: latestPacket.uav_id || 'UAV-BHARAT-01',
+    engine_id: latestPacket.engine_id || 'ENG_001',
     timestamp: latestPacket.timestamp,
-    simulation_id: latestPacket.simulation_id,
-    sequence_number: latestPacket.sequence_number,
-    aircraft: latestPacket.aircraft,
-    engine: latestPacket.engine,
+    sequence: latestPacket.sequence_number,
     rpm: latestPacket.rpm,
+    engine_load: latestPacket.engine_load,
+    vibration_rms_g: latestPacket.vibration_rms_g ?? latestPacket.vibration,
+    vibration_peak_g: latestPacket.vibration_peak_g,
+    dominant_frequency_hz: latestPacket.dominant_frequency_hz,
+    spectral_energy: latestPacket.spectral_energy,
     cht: latestPacket.cht,
     egt: latestPacket.egt,
     oil_pressure: latestPacket.oil_pressure,
     oil_temperature: latestPacket.oil_temperature,
-    vibration: latestPacket.vibration,
     fuel_flow: latestPacket.fuel_flow,
     fuel_pressure: latestPacket.fuel_pressure,
     map: latestPacket.map,
     altitude: latestPacket.altitude,
     airspeed: latestPacket.airspeed,
-    heading: latestPacket.heading,
     throttle: latestPacket.throttle,
-    engine_load: latestPacket.engine_load,
     ambient_temperature: latestPacket.ambient_temperature,
     flight_phase: latestPacket.flight_phase,
-    fault: latestPacket.fault,
-    fault_severity: latestPacket.fault_severity
+    fault_type: latestPacket.fault,
+    anomaly_flag: latestPacket.anomaly_flag
   }, null, 2) : '{\n  "status": "INITIALIZING_STREAM"\n}';
 
   return (

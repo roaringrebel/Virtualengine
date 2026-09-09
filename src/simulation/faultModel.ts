@@ -45,7 +45,7 @@ export const FAULT_DEFINITIONS: Record<FaultType, { name: string; description: s
     description: 'Mechanical rotational imbalance (propeller blade damage / engine mount fatigue).',
     propagation: [
       'Mechanical imbalance on rotating assembly',
-      'High-order harmonic vibration spikes (> 6.0 mm/s)',
+      'High-order harmonic vibration spikes (> 0.080 g RMS)',
       'RPM develops high-frequency instability',
       'Structural stress telemetry dispatched'
     ]
@@ -78,6 +78,26 @@ export const FAULT_DEFINITIONS: Record<FaultType, { name: string; description: s
       'Cylinder head temperature climbs progressively',
       'Oil radiator heat accumulation elevates Oil Temp',
       'Thermal creep propagates to Digital Twin'
+    ]
+  },
+  BEARING_FAULT: {
+    name: 'Bearing Raceway Fatigue',
+    description: 'Bearing spalling and micro-pitting creating high-frequency impulse impacts and friction.',
+    propagation: [
+      'Bearing race micro-defect impacts (~3.4X shaft RPM)',
+      'High kurtosis & periodic high-frequency vibration spikes',
+      'Friction torque buildup increases oil temperature',
+      'Degradation severity accelerates over time'
+    ]
+  },
+  MECHANICAL_FAULT: {
+    name: 'Mechanical Structural Looseness',
+    description: 'Engine mount degradation and crankshaft harmonic distortion generating 2X & 3X energy.',
+    propagation: [
+      'Mount stiffness loss causes structural asymmetric looseness',
+      'Strong 2X & 3X rotational harmonic generation',
+      'Broadband acoustic vibration excitation',
+      'Power delivery efficiency loss'
     ]
   }
 };

@@ -1,5 +1,5 @@
 import { FlightControlsState, FlightPhase, FlightState, NavigationMode } from '../types/simulation';
-import { LocationCoord, Waypoint } from '../types/mission';
+import { LocationCoord, Waypoint, ELPCandidate } from '../types/mission';
 import { SIMULATION_CONFIG } from './simulationConfig';
 import { haversineDistanceKm, initialBearingDeg, REAL_WORLD_MISSION_PRESETS } from './geoMath';
 
@@ -86,12 +86,20 @@ export class FlightDynamicsModel {
   public windSpeed: number = SIMULATION_CONFIG.defaultWindSpeedKmh; // km/h
   public windDirection: number = SIMULATION_CONFIG.defaultWindDirectionDeg; // deg
 
-  // Autopilot Waypoints
+  // Autopilot Waypoints & Normal Mission Lifecycle
   public waypoints: Waypoint[] = DEFAULT_MISSION_WAYPOINTS;
   public currentWaypointIndex: number = 0;
-  public flightPhase: FlightPhase = 'STANDBY';
+  public flightPhase: FlightPhase = 'PARKED';
   public navigationMode: NavigationMode = 'WAYPOINT_ROUTE';
   public isCompleted: boolean = false;
+  public isLanded: boolean = false;
+  private landingSequenceTimer: number = 0;
+
+  // Emergency Recovery & ELP Diversion State
+  public emergencyDivertActive: boolean = false;
+  public recoveryTarget: ELPCandidate | null = null;
+  public recoveryPhase: 'EVALUATING' | 'DIVERTING' | 'APPROACH' | 'LANDING' | 'RECOVERED' = 'EVALUATING';
+  public isRecovered: boolean = false;
 
   // Physical Limits from Config
   public maxTurnRateDegPerSec: number = SIMULATION_CONFIG.maxTurnRateDegPerSec;
@@ -126,9 +134,16 @@ export class FlightDynamicsModel {
     this.windSpeed = SIMULATION_CONFIG.defaultWindSpeedKmh;
     this.windDirection = SIMULATION_CONFIG.defaultWindDirectionDeg;
     this.currentWaypointIndex = 0;
-    this.flightPhase = 'STANDBY';
+    this.flightPhase = 'PARKED';
     this.navigationMode = 'WAYPOINT_ROUTE';
     this.isCompleted = false;
+    this.isLanded = false;
+    this.landingSequenceTimer = 0;
+
+    this.emergencyDivertActive = false;
+    this.recoveryTarget = null;
+    this.recoveryPhase = 'EVALUATING';
+    this.isRecovered = false;
   }
 
   public setMissionRoute(waypoints: Waypoint[]): void {
@@ -136,6 +151,11 @@ export class FlightDynamicsModel {
       this.waypoints = waypoints;
       this.currentWaypointIndex = 0;
       this.isCompleted = false;
+      this.isLanded = false;
+      this.landingSequenceTimer = 0;
+      this.emergencyDivertActive = false;
+      this.recoveryTarget = null;
+      this.isRecovered = false;
       this.latitude = waypoints[0].lat;
       this.longitude = waypoints[0].lon;
       if (waypoints.length > 1) {
@@ -144,6 +164,23 @@ export class FlightDynamicsModel {
         this.groundTrack = this.targetHeading;
       }
     }
+  }
+
+  /**
+   * Activates emergency diversion toward a selected ELP candidate
+   */
+  public activateEmergencyDivert(elp: ELPCandidate): void {
+    this.emergencyDivertActive = true;
+    this.recoveryTarget = elp;
+    this.recoveryPhase = 'DIVERTING';
+    this.flightPhase = 'EMERGENCY_DIVERT';
+    this.isCompleted = false;
+    this.isRecovered = false;
+
+    // Direct guidance toward ELP
+    this.targetHeading = initialBearingDeg(this.latitude, this.longitude, elp.lat, elp.lon);
+    this.targetAltitude = Math.min(this.altitude, Math.max(1200, elp.elevationFt + 1200));
+    this.targetAirspeed = 125; // Controlled glide/penetration airspeed
   }
 
   /**
@@ -156,17 +193,23 @@ export class FlightDynamicsModel {
     simTime: number,
     airDensityKgM3: number = SIMULATION_CONFIG.seaLevelAirDensityKgM3
   ): FlightState {
-    if (this.isCompleted) {
-      const destWp = this.waypoints[this.waypoints.length - 1] || this.waypoints[0];
-      this.latitude = destWp.lat;
-      this.longitude = destWp.lon;
-      this.altitude = destWp.altitudeFt || 0;
+    // -------------------------------------------------------------
+    // CASE A: MISSION ALREADY COMPLETED (Terminal state lock)
+    // -------------------------------------------------------------
+    if (this.isCompleted || this.isRecovered) {
+      const destTarget = this.isRecovered && this.recoveryTarget
+        ? { lat: this.recoveryTarget.lat, lon: this.recoveryTarget.lon, alt: this.recoveryTarget.elevationFt, name: this.recoveryTarget.name }
+        : (this.waypoints[this.waypoints.length - 1] || this.waypoints[0]);
+
+      this.latitude = destTarget.lat;
+      this.longitude = destTarget.lon;
+      this.altitude = destTarget.alt || destTarget.altitudeFt || 0;
       this.airspeed = 0;
       this.groundSpeed = 0;
       this.verticalSpeed = 0;
       this.turnRateDegPerSec = 0;
       this.bankAngleDeg = 0;
-      this.flightPhase = 'LANDING';
+      this.flightPhase = this.isRecovered ? 'RECOVERED' : 'COMPLETED';
 
       return {
         latitude: Number(this.latitude.toFixed(6)),
@@ -182,11 +225,11 @@ export class FlightDynamicsModel {
         targetAirspeed: 0,
         throttle: 0,
         engineLoad: 0,
-        flightPhase: 'LANDING',
+        flightPhase: this.flightPhase,
         windSpeed: this.windSpeed,
         windDirection: this.windDirection,
         currentWaypointIndex: this.waypoints.length - 1,
-        currentWaypointName: destWp.name,
+        currentWaypointName: destTarget.name,
         distanceToWaypointKm: 0,
         bearingToWaypointDeg: 0,
         missionProgressPercent: 100,
@@ -196,81 +239,198 @@ export class FlightDynamicsModel {
       };
     }
 
-    // 1. Waypoint Autopilot Logic
-    let distToWpKm = 0;
-    let bearingToWpDeg = 0;
+    // -------------------------------------------------------------
+    // CASE B: EMERGENCY RECOVERY DIVERSION PATHWAY
+    // -------------------------------------------------------------
+    if (this.emergencyDivertActive && this.recoveryTarget) {
+      const elp = this.recoveryTarget;
+      const distToElpKm = haversineDistanceKm(this.latitude, this.longitude, elp.lat, elp.lon);
+      const bearingToElpDeg = initialBearingDeg(this.latitude, this.longitude, elp.lat, elp.lon);
 
-    const currentWp = this.waypoints[this.currentWaypointIndex] || this.waypoints[0];
-    distToWpKm = haversineDistanceKm(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
-    bearingToWpDeg = initialBearingDeg(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
+      this.targetHeading = bearingToElpDeg;
 
-    if (engineOn && this.navigationMode === 'WAYPOINT_ROUTE') {
-      this.targetHeading = bearingToWpDeg;
-      if (currentWp.altitudeFt > 0) {
-        this.targetAltitude = currentWp.altitudeFt;
-      }
-      if (currentWp.targetAirspeedKmh > 0) {
-        this.targetAirspeed = currentWp.targetAirspeedKmh;
-      }
+      // ELP Arrival & Approach Thresholds
+      if (distToElpKm <= 0.35) {
+        // Snap to ELP and execute touchdown sequence
+        this.latitude = elp.lat;
+        this.longitude = elp.lon;
+        this.landingSequenceTimer += dt;
 
-      // Check if destination is reached (final waypoint)
-      if (this.currentWaypointIndex === this.waypoints.length - 1) {
-        if (distToWpKm <= 0.35) { // within 350 meters of destination terminal point
-          this.latitude = currentWp.lat;
-          this.longitude = currentWp.lon;
-          this.altitude = currentWp.altitudeFt || 0;
+        if (this.landingSequenceTimer < 2.5) {
+          this.flightPhase = 'LANDING';
+          this.recoveryPhase = 'LANDING';
+          this.altitude = Math.max(0, this.altitude - 400 * dt);
+          this.airspeed = Math.max(0, this.airspeed - 35 * dt);
+        } else {
+          this.altitude = elp.elevationFt || 0;
           this.airspeed = 0;
           this.groundSpeed = 0;
           this.verticalSpeed = 0;
-          this.turnRateDegPerSec = 0;
-          this.bankAngleDeg = 0;
-          this.flightPhase = 'LANDING';
+          this.flightPhase = 'RECOVERED';
+          this.recoveryPhase = 'RECOVERED';
+          this.isRecovered = true;
           this.isCompleted = true;
-
-          return {
-            latitude: Number(this.latitude.toFixed(6)),
-            longitude: Number(this.longitude.toFixed(6)),
-            altitude: Math.round(this.altitude),
-            heading: Math.round(this.heading),
-            airspeed: 0,
-            groundSpeed: 0,
-            verticalSpeed: 0,
-            groundTrack: this.groundTrack,
-            targetHeading: Math.round(this.targetHeading),
-            targetAltitude: Math.round(this.targetAltitude),
-            targetAirspeed: 0,
-            throttle: 0,
-            engineLoad: 0,
-            flightPhase: 'LANDING',
-            windSpeed: this.windSpeed,
-            windDirection: this.windDirection,
-            currentWaypointIndex: this.currentWaypointIndex,
-            currentWaypointName: currentWp.name,
-            distanceToWaypointKm: 0,
-            bearingToWaypointDeg: 0,
-            missionProgressPercent: 100,
-            turnRateDegPerSec: 0,
-            bankAngleDeg: 0,
-            isCompleted: true
-          };
         }
-      } else if (distToWpKm < 0.8) {
+
+        return {
+          latitude: Number(this.latitude.toFixed(6)),
+          longitude: Number(this.longitude.toFixed(6)),
+          altitude: Math.round(this.altitude),
+          heading: Math.round(this.heading),
+          airspeed: Math.round(this.airspeed),
+          groundSpeed: Math.round(this.groundSpeed),
+          verticalSpeed: Math.round(this.verticalSpeed),
+          groundTrack: this.groundTrack,
+          targetHeading: Math.round(this.targetHeading),
+          targetAltitude: elp.elevationFt,
+          targetAirspeed: 0,
+          throttle: 0,
+          engineLoad: 0,
+          flightPhase: this.flightPhase,
+          windSpeed: this.windSpeed,
+          windDirection: this.windDirection,
+          currentWaypointIndex: this.waypoints.length - 1,
+          currentWaypointName: `EMERGENCY DIVERT: ${elp.name}`,
+          distanceToWaypointKm: 0,
+          bearingToWaypointDeg: Math.round(bearingToElpDeg),
+          missionProgressPercent: 100,
+          turnRateDegPerSec: 0,
+          bankAngleDeg: 0,
+          isCompleted: this.isRecovered
+        };
+      } else if (distToElpKm < 2.5) {
+        this.flightPhase = 'RECOVERY_APPROACH';
+        this.recoveryPhase = 'APPROACH';
+        this.targetAltitude = elp.elevationFt + 300;
+        this.targetAirspeed = 95;
+      } else {
+        this.flightPhase = 'EMERGENCY_DIVERT';
+        this.recoveryPhase = 'DIVERTING';
+        this.targetAltitude = Math.max(elp.elevationFt + 800, this.altitude - 200 * dt);
+        this.targetAirspeed = 125;
+      }
+
+      // Execute dynamic physics update toward ELP
+      return this.integrateKinematics(dt, engineOn, enginePowerHp, simTime, airDensityKgM3, distToElpKm, bearingToElpDeg, elp.name);
+    }
+
+    // -------------------------------------------------------------
+    // CASE C: NORMAL MISSION PATHWAY
+    // -------------------------------------------------------------
+    const finalDestWp = this.waypoints[this.waypoints.length - 1] || this.waypoints[0];
+    const totalDistToDestKm = haversineDistanceKm(this.latitude, this.longitude, finalDestWp.lat, finalDestWp.lon);
+
+    let currentWp = this.waypoints[this.currentWaypointIndex] || this.waypoints[0];
+    let distToWpKm = haversineDistanceKm(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
+    let bearingToWpDeg = initialBearingDeg(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
+
+    // Check Destination Arrival Boundary
+    const isAtDestinationLeg = this.currentWaypointIndex >= this.waypoints.length - 1 || totalDistToDestKm < 3.5;
+
+    if (totalDistToDestKm <= 0.35) {
+      // SNAP TO DESTINATION — STOP FORWARD ADVANCEMENT
+      this.latitude = finalDestWp.lat;
+      this.longitude = finalDestWp.lon;
+      this.landingSequenceTimer += dt;
+
+      if (this.landingSequenceTimer < 3.0) {
+        this.flightPhase = 'LANDING';
+        this.altitude = Math.max(0, this.altitude - 350 * dt);
+        this.airspeed = Math.max(0, this.airspeed - 30 * dt);
+      } else {
+        this.altitude = finalDestWp.altitudeFt || 0;
+        this.airspeed = 0;
+        this.groundSpeed = 0;
+        this.verticalSpeed = 0;
+        this.flightPhase = 'COMPLETED';
+        this.isCompleted = true;
+        this.isLanded = true;
+      }
+
+      return {
+        latitude: Number(this.latitude.toFixed(6)),
+        longitude: Number(this.longitude.toFixed(6)),
+        altitude: Math.round(this.altitude),
+        heading: Math.round(this.heading),
+        airspeed: Math.round(this.airspeed),
+        groundSpeed: 0,
+        verticalSpeed: 0,
+        groundTrack: this.groundTrack,
+        targetHeading: Math.round(this.targetHeading),
+        targetAltitude: finalDestWp.altitudeFt || 0,
+        targetAirspeed: 0,
+        throttle: 0,
+        engineLoad: 0,
+        flightPhase: this.flightPhase,
+        windSpeed: this.windSpeed,
+        windDirection: this.windDirection,
+        currentWaypointIndex: this.waypoints.length - 1,
+        currentWaypointName: finalDestWp.name,
+        distanceToWaypointKm: 0,
+        bearingToWaypointDeg: 0,
+        missionProgressPercent: 100,
+        turnRateDegPerSec: 0,
+        bankAngleDeg: 0,
+        isCompleted: this.isCompleted
+      };
+    }
+
+    // Normal Waypoint Progression
+    if (engineOn && this.navigationMode === 'WAYPOINT_ROUTE') {
+      this.targetHeading = bearingToWpDeg;
+
+      if (isAtDestinationLeg && totalDistToDestKm < 2.5) {
+        this.flightPhase = 'APPROACH';
+        this.targetAltitude = finalDestWp.altitudeFt || 200;
+        this.targetAirspeed = 95;
+      } else if (isAtDestinationLeg && totalDistToDestKm < 7.0) {
+        this.flightPhase = 'DESCENT';
+        this.targetAltitude = 1800;
+        this.targetAirspeed = 125;
+      } else {
+        if (currentWp.altitudeFt > 0) {
+          this.targetAltitude = currentWp.altitudeFt;
+        }
+        if (currentWp.targetAirspeedKmh > 0) {
+          this.targetAirspeed = currentWp.targetAirspeedKmh;
+        }
+      }
+
+      if (distToWpKm < 0.8 && this.currentWaypointIndex < this.waypoints.length - 1) {
         this.currentWaypointIndex++;
+        currentWp = this.waypoints[this.currentWaypointIndex];
+        distToWpKm = haversineDistanceKm(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
+        bearingToWpDeg = initialBearingDeg(this.latitude, this.longitude, currentWp.lat, currentWp.lon);
       }
     }
 
-    // 2. Smooth Heading Dynamics with Inertia & Limited Turn Rate
+    return this.integrateKinematics(dt, engineOn, enginePowerHp, simTime, airDensityKgM3, distToWpKm, bearingToWpDeg, currentWp.name);
+  }
+
+  /**
+   * Integrates aerodynamic, heading, vertical speed, and geodetic coordinate displacement
+   */
+  private integrateKinematics(
+    dt: number,
+    engineOn: boolean,
+    enginePowerHp: number,
+    simTime: number,
+    airDensityKgM3: number,
+    distToTargetKm: number,
+    bearingToTargetDeg: number,
+    targetName: string
+  ): FlightState {
+    // 1. Heading Dynamics with Coordinated Bank
     if (engineOn && this.airspeed > 15) {
       let headingDiff = ((this.targetHeading - this.heading + 540) % 360) - 180;
       const turnAgility = Math.min(1.0, this.airspeed / 80.0);
       const effectiveMaxTurnRate = this.maxTurnRateDegPerSec * turnAgility;
       const desiredTurnRate = Math.sign(headingDiff) * Math.min(effectiveMaxTurnRate, Math.abs(headingDiff) * 1.6);
 
-      const turnTau = 0.5; // seconds
+      const turnTau = 0.5;
       this.turnRateDegPerSec += (desiredTurnRate - this.turnRateDegPerSec) * (1.0 - Math.exp(-dt / turnTau));
       this.heading = (this.heading + this.turnRateDegPerSec * dt + 360) % 360;
 
-      // Banking angle in coordinated turn
       const targetBank = -this.turnRateDegPerSec * 4.2;
       this.bankAngleDeg += (targetBank - this.bankAngleDeg) * Math.min(1.0, dt * 5.0);
     } else {
@@ -278,44 +438,38 @@ export class FlightDynamicsModel {
       this.bankAngleDeg = 0;
     }
 
-    // 3. Longitudinal Flight Dynamics (Thrust vs Aerodynamic Drag Force Balance)
+    // 2. Airspeed Dynamics & Thrust / Drag Balance
     if (!engineOn) {
-      // Aerodynamic deceleration when engine is OFF
       this.airspeed = Math.max(0, this.airspeed - 22.0 * dt);
     } else {
       const vMs = Math.max(0.1, (this.airspeed * 1000.0) / 3600.0);
       const powerWatts = enginePowerHp * 745.7;
 
-      // Propeller thrust: T = (P * eta) / V
       const effectiveSpeedMs = Math.max(vMs, 14.0);
       const thrustNewtons = (powerWatts * SIMULATION_CONFIG.propulsiveEfficiency) / effectiveSpeedMs;
 
-      // Aerodynamic drag: D = 0.5 * rho * V^2 * Cd * S + D_induced
       const dynamicPressure = 0.5 * airDensityKgM3 * vMs * vMs;
       const parasiteDragNewtons = dynamicPressure * SIMULATION_CONFIG.zeroLiftDragCoeff * SIMULATION_CONFIG.referenceAreaM2;
       const inducedDragNewtons = Math.min(400, (SIMULATION_CONFIG.aircraftMassKg * 9.81 * 0.08) / Math.max(1.0, vMs / 10.0));
       const totalDragNewtons = parasiteDragNewtons + inducedDragNewtons;
 
-      // Net longitudinal force & Newton acceleration
       const netForceNewtons = thrustNewtons - totalDragNewtons;
       const accelerationMs2 = netForceNewtons / SIMULATION_CONFIG.aircraftMassKg;
 
-      // Target airspeed governor coupling
       const throttleNorm = Math.max(0, Math.min(100, this.throttle)) / 100.0;
       const targetEquilibriumKmh = 60.0 + (throttleNorm * 145.0 * Math.max(0.2, enginePowerHp / 95.0));
       const commandedTargetKmh = this.navigationMode === 'MANUAL_PILOT' ? targetEquilibriumKmh : Math.min(this.targetAirspeed, targetEquilibriumKmh + 10.0);
 
-      // Integrate acceleration with lag smoothing
       const accelKmhPerSec = accelerationMs2 * 3.6;
       const rawNewSpeedKmh = Math.max(0, this.airspeed + accelKmhPerSec * dt);
 
-      const speedTau = 2.0; // seconds
+      const speedTau = 2.0;
       const speedAlpha = 1.0 - Math.exp(-dt / speedTau);
       this.airspeed += (commandedTargetKmh - this.airspeed) * speedAlpha * 0.4 + (rawNewSpeedKmh - this.airspeed) * 0.6;
       this.airspeed = Math.max(0, Math.min(this.maxFlightAirspeedKmh, this.airspeed));
     }
 
-    // 4. Smooth Altitude & Vertical Speed Dynamics
+    // 3. Vertical Speed & Altitude Dynamics
     if (!engineOn) {
       if (this.altitude > 0) {
         this.verticalSpeed += (-500 - this.verticalSpeed) * Math.min(1.0, dt * 2.0);
@@ -337,18 +491,17 @@ export class FlightDynamicsModel {
         desiredVzFpm = 0;
       }
 
-      const vzTau = 0.8; // seconds
+      const vzTau = 0.8;
       this.verticalSpeed += (desiredVzFpm - this.verticalSpeed) * (1.0 - Math.exp(-dt / vzTau));
       this.altitude = Math.max(0, this.altitude + (this.verticalSpeed / 60.0) * dt);
     }
 
-    // 5. Environmental Wind & Ground Velocity Vector Calculation
+    // 4. Ground Velocity Vector Calculation
     const headingRad = (this.heading * Math.PI) / 180.0;
     const airSpeedMs = (this.airspeed * 1000.0) / 3600.0;
     const airNorthMs = airSpeedMs * Math.cos(headingRad);
     const airEastMs = airSpeedMs * Math.sin(headingRad);
 
-    // Wind vector (wind blowing FROM windDirection)
     const windToRad = (((this.windDirection + 180) % 360) * Math.PI) / 180.0;
     const windSpeedMs = (this.windSpeed * 1000.0) / 3600.0;
     const windNorthMs = windSpeedMs * Math.cos(windToRad);
@@ -366,22 +519,11 @@ export class FlightDynamicsModel {
       this.groundTrack = Math.round(this.heading);
     }
 
-    // 6. Smooth Controlled Low-Frequency Atmospheric Turbulence
-    let turbHeading = 0;
-    let turbVz = 0;
-    let turbSpeed = 0;
-    if (engineOn && this.airspeed > 40) {
-      turbHeading = Math.sin(simTime * 0.45) * 0.35 + Math.cos(simTime * 0.95) * 0.25;
-      turbVz = Math.sin(simTime * 0.65) * 15.0 + Math.cos(simTime * 1.25) * 10.0;
-      turbSpeed = Math.sin(simTime * 0.35) * 1.2;
-    }
-
-    // 7. Geodetic Coordinate Propagation (Authoritative Earth Equations)
+    // 5. Geodetic Coordinate Propagation
     if (engineOn && this.groundSpeed > 1.0) {
       const distanceMovedMeters = groundSpeedMs * dt;
-      const effectiveHeadingRad = ((this.groundTrack + turbHeading) * Math.PI) / 180.0;
+      const effectiveHeadingRad = (this.groundTrack * Math.PI) / 180.0;
 
-      // North & East displacement vectors
       const northDistance = distanceMovedMeters * Math.cos(effectiveHeadingRad);
       const eastDistance = distanceMovedMeters * Math.sin(effectiveHeadingRad);
 
@@ -393,23 +535,28 @@ export class FlightDynamicsModel {
       this.longitude += eastDistance / metersPerDegreeLongitude;
     }
 
-    // 8. Flight Phase Logic
+    // 6. Flight Phase State Machine
     this.updateFlightPhase(engineOn);
 
-    // 9. Mission Progress Calculation
-    const totalLegs = Math.max(1, this.waypoints.length - 1);
-    const legProgress = Math.max(0, Math.min(1.0, 1.0 - (distToWpKm / 5.0)));
-    const totalProgress = ((this.currentWaypointIndex + legProgress) / totalLegs) * 100.0;
-    const missionProgress = Math.min(100, Math.round(totalProgress));
+    // 7. Mission Progress
+    let missionProgress = 0;
+    if (this.emergencyDivertActive && this.recoveryTarget) {
+      missionProgress = Math.max(0, Math.min(99, Math.round((1.0 - Math.min(1.0, distToTargetKm / 10.0)) * 100)));
+    } else {
+      const totalLegs = Math.max(1, this.waypoints.length - 1);
+      const legProgress = Math.max(0, Math.min(1.0, 1.0 - (distToTargetKm / 5.0)));
+      const totalProgress = ((this.currentWaypointIndex + legProgress) / totalLegs) * 100.0;
+      missionProgress = Math.min(99, Math.round(totalProgress));
+    }
 
     return {
       latitude: Number(this.latitude.toFixed(6)),
       longitude: Number(this.longitude.toFixed(6)),
       altitude: Math.round(this.altitude),
-      heading: Math.round((this.heading + turbHeading + 360) % 360),
-      airspeed: Math.round(Math.max(0, this.airspeed + turbSpeed)),
+      heading: Math.round(this.heading),
+      airspeed: Math.round(this.airspeed),
       groundSpeed: Math.round(this.groundSpeed),
-      verticalSpeed: Math.round(this.verticalSpeed + turbVz),
+      verticalSpeed: Math.round(this.verticalSpeed),
       groundTrack: this.groundTrack,
       targetHeading: Math.round(this.targetHeading),
       targetAltitude: Math.round(this.targetAltitude),
@@ -420,9 +567,9 @@ export class FlightDynamicsModel {
       windSpeed: this.windSpeed,
       windDirection: this.windDirection,
       currentWaypointIndex: this.currentWaypointIndex,
-      currentWaypointName: currentWp.name,
-      distanceToWaypointKm: distToWpKm,
-      bearingToWaypointDeg: bearingToWpDeg,
+      currentWaypointName: targetName,
+      distanceToWaypointKm: distToTargetKm,
+      bearingToWaypointDeg: bearingToTargetDeg,
       missionProgressPercent: missionProgress,
       turnRateDegPerSec: Number(this.turnRateDegPerSec.toFixed(2)),
       bankAngleDeg: Number(this.bankAngleDeg.toFixed(1)),
@@ -431,20 +578,40 @@ export class FlightDynamicsModel {
 
   private updateFlightPhase(engineOn: boolean): void {
     if (!engineOn) {
-      this.flightPhase = 'STANDBY';
+      this.flightPhase = this.isCompleted ? (this.isRecovered ? 'RECOVERED' : 'COMPLETED') : 'PARKED';
       return;
     }
 
-    if (this.throttle < 35 && this.altitude < 150 && this.airspeed < 50) {
+    if (this.emergencyDivertActive) {
+      if (this.isRecovered) {
+        this.flightPhase = 'RECOVERED';
+      } else if (this.recoveryPhase === 'LANDING') {
+        this.flightPhase = 'LANDING';
+      } else if (this.recoveryPhase === 'APPROACH') {
+        this.flightPhase = 'RECOVERY_APPROACH';
+      } else {
+        this.flightPhase = 'EMERGENCY_DIVERT';
+      }
+      return;
+    }
+
+    if (this.isCompleted) {
+      this.flightPhase = 'COMPLETED';
+      return;
+    }
+
+    if (this.throttle < 35 && this.altitude < 50 && this.airspeed < 45) {
       this.flightPhase = 'STARTUP';
-    } else if (this.throttle >= 70 && this.altitude < 1200 && this.verticalSpeed > 100) {
+    } else if (this.throttle >= 60 && this.altitude < 400 && this.airspeed > 40) {
       this.flightPhase = 'TAKEOFF';
-    } else if (this.verticalSpeed >= 180 && this.altitude < this.targetAltitude - 150) {
+    } else if (this.verticalSpeed >= 150 && this.altitude < this.targetAltitude - 150) {
       this.flightPhase = 'CLIMB';
-    } else if (this.verticalSpeed <= -180 && this.altitude > 800) {
+    } else if (this.flightPhase === 'APPROACH') {
+      // Retain approach state
+    } else if (this.flightPhase === 'DESCENT') {
+      // Retain descent state
+    } else if (this.verticalSpeed <= -150 && this.altitude > 800) {
       this.flightPhase = 'DESCENT';
-    } else if (this.altitude <= 800 && this.verticalSpeed < -50 && this.airspeed < 110) {
-      this.flightPhase = 'LANDING';
     } else {
       this.flightPhase = 'CRUISE';
     }

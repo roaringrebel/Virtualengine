@@ -79,7 +79,7 @@ export const SIMULATION_CONFIG: SimulationConfig = {
   propellerDiameterM: 1.70,
 
   // Rotax 912 ULS Engine Specifications
-  engineIdleRpm: 1800,
+  engineIdleRpm: 1400,
   engineMaxContinuousRpm: 5500,
   engineMaxTakeoffRpm: 5800,
   engineMaxPowerHp: 100.0,

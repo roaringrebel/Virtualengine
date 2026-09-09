@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, ChevronDown, Check, Activity, Thermometer, Droplet, Flame, Fuel, Wind } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Check, Activity, Thermometer, Droplet, Flame, Fuel, Wind, Disc, Wrench } from 'lucide-react';
 import { FaultSeverity, FaultState, FaultType } from '../types/simulation';
 import { FAULT_DEFINITIONS } from '../simulation/faultModel';
 
@@ -22,11 +22,13 @@ export const FaultSimulation: React.FC<FaultSimulationProps> = ({
 
   const faultOptions: Array<{ id: FaultType; label: string; icon: React.ComponentType<{ className?: string }> }> = [
     { id: 'NORMAL', label: 'Normal Operation', icon: Check },
+    { id: 'EXCESSIVE_VIBRATION', label: 'Excessive Vibration (Imbalance)', icon: Activity },
+    { id: 'RPM_INSTABILITY', label: 'RPM Instability (Hunting/Misfire)', icon: Wind },
+    { id: 'BEARING_FAULT', label: 'Bearing Fatigue (High Freq Spalling)', icon: Disc },
+    { id: 'MECHANICAL_FAULT', label: 'Mechanical Looseness (2X/3X Harmonics)', icon: Wrench },
     { id: 'LOW_OIL_PRESSURE', label: 'Low Oil Pressure', icon: Droplet },
     { id: 'HIGH_CHT', label: 'High CHT', icon: Thermometer },
-    { id: 'OVERHEATING', label: 'Overheating', icon: Flame },
-    { id: 'EXCESSIVE_VIBRATION', label: 'Excessive Vibration', icon: Activity },
-    { id: 'RPM_INSTABILITY', label: 'RPM Instability', icon: Wind },
+    { id: 'OVERHEATING', label: 'Overheating (Dual CHT/Oil)', icon: Flame },
     { id: 'FUEL_PRESSURE_DROP', label: 'Fuel Pressure Drop', icon: Fuel },
     { id: 'COOLING_PROBLEM', label: 'Cooling Problem', icon: AlertTriangle },
   ];

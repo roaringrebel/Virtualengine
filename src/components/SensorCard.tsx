@@ -6,14 +6,15 @@ import {
   Droplet, 
   Activity, 
   Fuel, 
-  Compass as DialIcon 
+  Compass as DialIcon,
+  Cpu
 } from 'lucide-react';
 import { VirtualSensorReading } from '../types/simulation';
 
 interface SensorCardProps {
   label: string;
   reading: VirtualSensorReading;
-  iconType: 'rpm' | 'cht' | 'egt' | 'oilPressure' | 'oilTemp' | 'vibration' | 'fuelFlow' | 'fuelPressure' | 'map';
+  iconType: 'rpm' | 'cht' | 'egt' | 'oilPressure' | 'oilTemp' | 'vibration' | 'fuelFlow' | 'fuelPressure' | 'map' | 'engineLoad';
   engineOn: boolean;
 }
 
@@ -38,6 +39,8 @@ export const SensorCard: React.FC<SensorCardProps> = ({ label, reading, iconType
         return <DialIcon className="w-4 h-4 text-[#F97316]" />;
       case 'map':
         return <Gauge className="w-4 h-4 text-[#F97316]" />;
+      case 'engineLoad':
+        return <Cpu className="w-4 h-4 text-[#F97316]" />;
       default:
         return <Gauge className="w-4 h-4 text-[#F97316]" />;
     }
@@ -57,9 +60,21 @@ export const SensorCard: React.FC<SensorCardProps> = ({ label, reading, iconType
     return 'border-[#E5E7EB] bg-white';
   };
 
-  const displayVal = engineOn 
-    ? (iconType === 'rpm' ? reading.value.toLocaleString() : reading.value.toFixed(1))
-    : (iconType === 'rpm' ? '0' : iconType === 'cht' || iconType === 'oilTemp' || iconType === 'egt' ? '30.0' : iconType === 'map' ? '29.9' : '0.0');
+  const formatDisplayValue = () => {
+    if (!engineOn) {
+      if (iconType === 'rpm') return '0';
+      if (iconType === 'vibration') return '0.001';
+      if (iconType === 'oilPressure' || iconType === 'fuelFlow' || iconType === 'engineLoad') return '0.0';
+      if (iconType === 'map') return '29.9';
+      if (iconType === 'cht' || iconType === 'oilTemp' || iconType === 'egt') return reading.value.toFixed(1);
+      return '0.0';
+    }
+
+    if (iconType === 'rpm') return reading.value.toLocaleString();
+    if (iconType === 'vibration') return reading.value.toFixed(3);
+    if (iconType === 'engineLoad') return Math.round(reading.value).toString();
+    return reading.value.toFixed(1);
+  };
 
   return (
     <div className={`p-2.5 rounded-xl border ${getCardBorder()} shadow-xs hover:shadow-sm transition-all duration-200 flex items-center justify-between`}>
@@ -75,7 +90,7 @@ export const SensorCard: React.FC<SensorCardProps> = ({ label, reading, iconType
           </div>
           <div className="flex items-baseline gap-1 mt-0.5">
             <span className={`text-base font-extrabold font-mono tracking-tight leading-none ${getStatusColor()}`}>
-              {displayVal}
+              {formatDisplayValue()}
             </span>
             <span className="text-[10px] font-bold text-[#9CA3AF]">
               {reading.unit}

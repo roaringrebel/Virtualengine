@@ -61,3 +61,34 @@ export interface UAVPosition {
   distanceToNextKm: number;
   missionProgressPercent: number;
 }
+
+export interface ELPCandidate {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  elevationFt: number;
+  runwayLengthM: number;
+  distanceFromUavKm: number;
+  bearingFromUavDeg: number;
+  reachable: boolean;
+  estimatedDiversionTimeMinutes: number;
+  terrainSuitability: 'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR';
+  obstacleRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  landingSuitability: 'HARD_RUNWAY' | 'GRASS_STRIP' | 'UNPREPARED_FLAT';
+  overallRisk: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  score: number;
+  isSelected?: boolean;
+}
+
+export interface EmergencyRecoveryState {
+  isActive: boolean;
+  triggerReason: string;
+  originalMissionAborted: boolean;
+  selectedELP: ELPCandidate | null;
+  candidates: ELPCandidate[];
+  recoveryPhase: 'EVALUATING' | 'DIVERTING' | 'APPROACH' | 'LANDING' | 'RECOVERED';
+  diversionDistanceKm: number;
+  diversionEtaMinutes: number;
+  diversionProgressPercent: number;
+}

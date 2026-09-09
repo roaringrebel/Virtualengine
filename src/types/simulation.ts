@@ -1,6 +1,22 @@
-export type FlightPhase = 'STANDBY' | 'STARTUP' | 'TAKEOFF' | 'CLIMB' | 'CRUISE' | 'DESCENT' | 'LANDING';
+import { ELPCandidate, EmergencyRecoveryState } from './mission';
 
-export type EngineStatus = 'OFF' | 'STARTING' | 'IDLE' | 'RUNNING' | 'FAULT' | 'STOPPING';
+export type FlightPhase = 
+  | 'PARKED'
+  | 'STANDBY' 
+  | 'STARTUP' 
+  | 'TAKEOFF' 
+  | 'CLIMB' 
+  | 'CRUISE' 
+  | 'DESCENT' 
+  | 'APPROACH'
+  | 'LANDING' 
+  | 'LANDED'
+  | 'COMPLETED'
+  | 'EMERGENCY_DIVERT'
+  | 'RECOVERY_APPROACH'
+  | 'RECOVERED';
+
+export type EngineStatus = 'OFF' | 'STARTING' | 'CRANKING' | 'IGNITION' | 'IDLE' | 'RUNNING' | 'FAULT' | 'STOPPING';
 
 export type NavigationMode = 'MANUAL_PILOT' | 'WAYPOINT_ROUTE';
 
@@ -12,9 +28,11 @@ export type FaultType =
   | 'EXCESSIVE_VIBRATION'
   | 'RPM_INSTABILITY'
   | 'FUEL_PRESSURE_DROP'
-  | 'COOLING_PROBLEM';
+  | 'COOLING_PROBLEM'
+  | 'BEARING_FAULT'
+  | 'MECHANICAL_FAULT';
 
-export type FaultSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+export type FaultSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface FlightControlsState {
   throttle: number;         // 0 - 100% (target commanded throttle)
@@ -69,6 +87,45 @@ export interface AtmosphericState {
   densityRatio: number;     // rho / rho0
 }
 
+export interface VibrationMetrics {
+  rmsG: number;             // Root Mean Square acceleration (g)
+  peakG: number;            // Peak absolute acceleration (g)
+  peakToPeakG: number;      // Peak-to-Peak acceleration (g)
+  crestFactor: number;      // Peak / RMS ratio
+  kurtosis: number;         // 4th standardized statistical moment
+  variance: number;         // Signal variance (g^2)
+  dominantFreqHz: number;   // Dominant FFT frequency peak (Hz)
+  freqAmplitudeG: number;   // Peak frequency spectral amplitude (g)
+  spectralEnergy: number;   // Total sum of spectral bin powers
+  harmonic1XEnergy: number; // 1X Shaft frequency energy (RPM/60)
+  harmonic2XEnergy: number; // 2X Cylinder firing frequency energy
+  harmonic3XEnergy: number; // 3X Harmonic energy
+  bearingFaultEnergy: number;// High-frequency bearing defect energy
+  accelXG: number;          // Current instantaneous X acceleration (g)
+  accelYG: number;          // Current instantaneous Y acceleration (g)
+  accelZG: number;          // Current instantaneous Z acceleration (g)
+  resultantG: number;       // Current resultant sqrt(x^2 + y^2 + z^2)
+}
+
+export interface SimulationHistoryPoint {
+  timeMs: number;
+  simTimeSec: number;
+  rpm: number;
+  cht: number;
+  egt: number;
+  oilPressure: number;
+  oilTemperature: number;
+  fuelFlow: number;
+  fuelPressure: number;
+  manifoldPressure: number;
+  engineLoad: number;
+  vibrationRmsG: number;
+  vibrationPeakG: number;
+  dominantFreqHz: number;
+  airspeed: number;
+  altitude: number;
+}
+
 export interface Rotax912State {
   engineOn: boolean;
   rpm: number;
@@ -79,7 +136,8 @@ export interface Rotax912State {
   manifoldPressure: number; // inHg (MAP)
   fuelFlow: number;         // L/h
   fuelPressure: number;     // bar
-  vibration: number;        // mm/s RMS
+  vibration: number;        // Vibration RMS (g)
+  vibrationMetrics: VibrationMetrics;
   status: EngineStatus;
   efficiencyLossRatio: number; // 0.0 - 0.5 power degradation from faults
   engineCondition: number;     // 0.0 - 1.0 (1.0 = pristine nominal condition)
@@ -113,6 +171,7 @@ export interface SensorSuiteState {
   fuelFlow: VirtualSensorReading;
   fuelPressure: VirtualSensorReading;
   map: VirtualSensorReading;
+  engineLoad: VirtualSensorReading;
 }
 
 export interface FaultState {
@@ -124,21 +183,61 @@ export interface FaultState {
 }
 
 export type MissionRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type MissionDecision = 'GO' | 'CAUTION' | 'NO-GO';
+export type MissionDecision = 'GO' | 'CAUTION' | 'NO-GO' | 'EMERGENCY RECOVERY';
+
+export interface EnduranceCheckResult {
+  status: 'PASS' | 'MARGINAL' | 'FAIL';
+  requiredHours: number;
+  rulHours: number;
+  marginHours: number;
+  details: string;
+}
+
+export interface HealthCheckResult {
+  status: 'NORMAL' | 'PASS' | 'WARNING' | 'DEGRADED' | 'FAIL' | 'CRITICAL';
+  faultName: string;
+  faultSeverity: string;
+  details: string;
+}
+
+export interface RiskCheckResult {
+  status: 'PASS' | 'ELEVATED' | 'FAIL';
+  riskScorePercent: number;
+  details: string;
+}
 
 export interface MissionReliabilityState {
   reliabilityScore: number;         // 0 - 100%
   riskLevel: MissionRisk;           // LOW | MEDIUM | HIGH | CRITICAL
-  decision: MissionDecision;         // GO | CAUTION | NO-GO
-  decisionReason: string;
+  decision: MissionDecision;         // GO | CAUTION | NO-GO | EMERGENCY RECOVERY
+  decisionReason: string;           // Clear engineering reasoning
+
+  // Authoritative Mission & Endurance Parameters (ONE Truth)
+  totalMissionDistanceKm: number;   // Total route distance (km)
+  estimatedFlightTimeMinutes: number; // e.g. 9 min
+  missionDemandHours: number;       // e.g. 0.15 h (estimatedFlightTimeMinutes / 60)
+  rulHours: number;                 // Prognostic Remaining Useful Life (hours)
+  rulMarginHours: number;           // Exact: rulHours - missionDemandHours (hours, e.g. +3.55 h)
+  missionMarginHours: number;       // Alias for backward compatibility
+
+  // Specific Check Sub-Results (for UI & Explainability)
+  enduranceCheck: EnduranceCheckResult;
+  healthCheck: HealthCheckResult;
+  riskCheck: RiskCheckResult;
+
+  // In-Flight Critical Persistence Tracker
+  criticalPersistenceSeconds: number;     // e.g. 18 / 30 sec
+  criticalPersistenceMaxSeconds: number;  // 30
+  emergencyRecoveryTriggered: boolean;   // true if continuous critical condition >= 30s while airborne
+
+  // Diagnostic Health Metrics
   engineSOH: number;                // 0 - 100%
-  rulHours: number;                 // Remaining Useful Life in hours
   faultRiskPercent: number;         // 0 - 100%
-  missionMarginHours: number;       // RUL - remaining mission time (hours)
   anomalyScore: number;             // 0.0 - 1.0
+
+  // Route & Navigation Progress
   missionProgressPercent: number;   // 0 - 100%
   distanceRemainingKm: number;      // km
-  totalMissionDistanceKm?: number;  // km
   timeRemainingSeconds: number;     // seconds
   timeRemainingFormatted: string;   // mm:ss
   missionTimeFormatted: string;     // mm:ss
@@ -147,6 +246,7 @@ export interface MissionReliabilityState {
   routeDeviationKm: number;         // cross-track deviation (km)
   isCompleted?: boolean;
   missionStatus?: 'STANDBY' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
+  emergencyRecovery?: EmergencyRecoveryState;
 }
 
 export interface SimulationState {
@@ -167,5 +267,7 @@ export interface SimulationState {
   sensors: SensorSuiteState;
   fault: FaultState;
   reliability: MissionReliabilityState;
+  history: SimulationHistoryPoint[];
+  liveWaveform: number[];
 }
 

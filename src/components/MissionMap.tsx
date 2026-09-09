@@ -12,10 +12,13 @@ import {
   Compass,
   Gauge,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  AlertOctagon,
+  Zap,
+  MapPin
 } from 'lucide-react';
 import { FaultState, FlightPhase, FlightState, MissionReliabilityState } from '../types/simulation';
-import { LocationCoord, UAVPosition, Waypoint } from '../types/mission';
+import { LocationCoord, UAVPosition, Waypoint, ELPCandidate } from '../types/mission';
 import { formatCoordinateDisplay, haversineDistanceKm } from '../simulation/geoMath';
 
 interface MissionMapProps {
@@ -68,7 +71,6 @@ export const MissionMap: React.FC<MissionMapProps> = ({
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
 
-  // Map styles: 'street' (OSM) | 'terrain' (OpenTopoMap) | 'satellite' (Esri)
   const [mapStyle, setMapStyle] = useState<'street' | 'terrain' | 'satellite'>('street');
   const [followUav, setFollowUav] = useState<boolean>(true);
 
@@ -77,12 +79,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({
   const uavMarkerRef = useRef<L.Marker | null>(null);
   const plannedRouteLineRef = useRef<L.Polyline | null>(null);
   const actualTrackLineRef = useRef<L.Polyline | null>(null);
+  const emergencyDivertLineRef = useRef<L.Polyline | null>(null);
   const waypointMarkersRef = useRef<L.Marker[]>([]);
+  const elpMarkersRef = useRef<L.Marker[]>([]);
   const baseTileLayerRef = useRef<L.TileLayer | null>(null);
   const actualTrackPointsRef = useRef<[number, number][]>([]);
   const lastTrackAppendPosRef = useRef<[number, number]>([uavPosition.lat, uavPosition.lon]);
 
-  // Persistent ref for click handlers
   const stateRef = useRef({
     uavPosition,
     flightPhase,
@@ -107,12 +110,17 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     };
   });
 
-  const isCompleted = flight?.isCompleted || reliability?.isCompleted || flightPhase === 'LANDING' && (reliability?.distanceRemainingKm ?? 0) <= 0.35;
+  const isRecovered = flightPhase === 'RECOVERED';
+  const isCompleted = flightPhase === 'COMPLETED' || flight?.isCompleted || reliability?.isCompleted;
+  const isEmergencyDivert = flightPhase === 'EMERGENCY_DIVERT' || flightPhase === 'RECOVERY_APPROACH' || isRecovered || (reliability?.emergencyRecoveryTriggered ?? false);
+  const emergencyRecovery = reliability?.emergencyRecovery;
+  const selectedELP = emergencyRecovery?.selectedELP;
+
   const currentAlt = flight?.altitude ?? uavPosition.altitude;
   const currentAirspeed = flight?.airspeed ?? uavPosition.airspeed;
   const currentGroundSpeed = flight?.groundSpeed ?? 0;
   const currentHeading = flight?.heading ?? uavPosition.heading;
-  const distRemaining = isCompleted ? 0 : (reliability?.distanceRemainingKm ?? uavPosition.distanceToNextKm);
+  const distRemaining = (isCompleted || isRecovered) ? 0 : (reliability?.distanceRemainingKm ?? uavPosition.distanceToNextKm);
 
   // --------------------------------------------------------------------------
   // 1. INITIALIZE 2D LEAFLET MAP
@@ -148,6 +156,17 @@ export const MissionMap: React.FC<MissionMapProps> = ({
     }).addTo(map);
     plannedRouteLineRef.current = plannedLine;
 
+    // Emergency Diversion Polyline (dashed rose/red line)
+    const divertLine = L.polyline([], {
+      color: '#E11D48',
+      weight: 4,
+      dashArray: '6, 6',
+      opacity: 0.95,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map);
+    emergencyDivertLineRef.current = divertLine;
+
     // Actual Flight Track Polyline (solid orange line)
     const actualLine = L.polyline([], {
       color: '#F97316',
@@ -178,7 +197,6 @@ export const MissionMap: React.FC<MissionMapProps> = ({
             transform-origin: center center;
             transition: transform 0.15s ease-out;
           " viewBox="0 0 24 24" fill="none">
-            <!-- UAV Airframe Body -->
             <path d="M12 2L15 9L22 13L15 14.5L13.5 21L12 22L10.5 21L9 14.5L2 13L9 9L12 2Z" fill="#F97316" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/>
             <circle cx="12" cy="11" r="2.2" fill="#0F172A" stroke="#FFFFFF" stroke-width="0.8"/>
             <circle cx="12" cy="3" r="1.5" fill="#EF4444"/>
@@ -222,94 +240,178 @@ export const MissionMap: React.FC<MissionMapProps> = ({
   }, []);
 
   // --------------------------------------------------------------------------
-  // 2. UPDATE GEOGRAPHIC WAYPOINT MARKERS & ROUTE LINES
+  // 2. UPDATE GEOGRAPHIC WAYPOINTS & ELP MARKERS
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
 
-    // Remove existing waypoint markers
+    // 1. Remove old waypoint & ELP markers
     waypointMarkersRef.current.forEach(m => m.remove());
     waypointMarkersRef.current = [];
+    elpMarkersRef.current.forEach(m => m.remove());
+    elpMarkersRef.current = [];
 
-    if (!waypoints || waypoints.length === 0) return;
+    // 2. Normal Planned Route Polyline
+    if (waypoints && waypoints.length > 0) {
+      const routeCoords: [number, number][] = waypoints.map(w => [w.lat, w.lon]);
+      if (plannedRouteLineRef.current) {
+        plannedRouteLineRef.current.setLatLngs(routeCoords);
+        if (isEmergencyDivert) {
+          plannedRouteLineRef.current.setStyle({ color: '#64748B', opacity: 0.35, dashArray: '4, 4' });
+        } else {
+          plannedRouteLineRef.current.setStyle({ color: '#0284C7', opacity: 0.9, dashArray: '8, 6' });
+        }
+      }
 
-    // Update Planned Route Polyline
-    const routeCoords: [number, number][] = waypoints.map(w => [w.lat, w.lon]);
-    if (plannedRouteLineRef.current) {
-      plannedRouteLineRef.current.setLatLngs(routeCoords);
+      // Add Waypoint Markers
+      waypoints.forEach((wp, idx) => {
+        const isSource = wp.type === 'SOURCE' || idx === 0;
+        const isDest = wp.type === 'DESTINATION' || idx === waypoints.length - 1;
+        
+        let bgColor = isSource ? '#10B981' : isDest ? '#EF4444' : '#F97316';
+        let labelBadge = isSource ? 'SRC' : isDest ? (isEmergencyDivert ? 'DEST (ABORTED)' : 'DST') : `WP${idx}`;
+        if (isEmergencyDivert && isDest) {
+          bgColor = '#64748B';
+        }
+
+        const wpIcon = L.divIcon({
+          className: 'custom-wp-icon',
+          html: `
+            <div style="
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              transform: translate(-50%, -50%);
+              pointer-events: auto;
+              opacity: ${isEmergencyDivert && !isSource ? 0.45 : 1.0};
+            ">
+              <div style="
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                background: ${bgColor};
+                border: 2px solid #FFFFFF;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #FFFFFF;
+                font-family: ui-monospace, monospace;
+                font-size: 10px;
+                font-weight: 800;
+              ">
+                ${isSource ? 'S' : isDest ? (isEmergencyDivert ? '✕' : 'D') : idx}
+              </div>
+              <div style="
+                background: rgba(15, 23, 42, 0.90);
+                color: #F8FAFC;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-family: system-ui, sans-serif;
+                font-size: 9px;
+                font-weight: 700;
+                white-space: nowrap;
+                margin-top: 2px;
+                border: 1px solid rgba(255,255,255,0.2);
+                box-shadow: 0 2px 4px rgba(0,0,0,0.35);
+              ">
+                ${labelBadge} &bull; ${wp.name.split('—')[0]}
+              </div>
+            </div>
+          `,
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        });
+
+        const marker = L.marker([wp.lat, wp.lon], { icon: wpIcon }).addTo(map);
+        waypointMarkersRef.current.push(marker);
+      });
     }
 
-    // Add Source, Destination, and intermediate waypoint markers
-    waypoints.forEach((wp, idx) => {
-      const isSource = wp.type === 'SOURCE' || idx === 0;
-      const isDest = wp.type === 'DESTINATION' || idx === waypoints.length - 1;
-      
-      const bgColor = isSource ? '#10B981' : isDest ? '#EF4444' : '#F97316';
-      const labelBadge = isSource ? 'SRC' : isDest ? 'DST' : `WP${idx}`;
+    // 3. Emergency Landing Points (ELPs) Rendering (When Emergency Divert Active)
+    if (isEmergencyDivert && emergencyRecovery && emergencyRecovery.candidates) {
+      emergencyRecovery.candidates.forEach((elp) => {
+        const isSelected = elp.isSelected;
+        const iconColor = isSelected ? '#10B981' : elp.reachable ? '#F59E0B' : '#EF4444';
 
-      const wpIcon = L.divIcon({
-        className: 'custom-wp-icon',
-        html: `
-          <div style="
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            transform: translate(-50%, -50%);
-            pointer-events: auto;
-          ">
+        const elpIcon = L.divIcon({
+          className: 'custom-elp-icon',
+          html: `
             <div style="
-              width: 24px;
-              height: 24px;
-              border-radius: 50%;
-              background: ${bgColor};
-              border: 2px solid #FFFFFF;
-              box-shadow: 0 2px 6px rgba(0,0,0,0.45);
               display: flex;
+              flex-direction: column;
               align-items: center;
-              justify-content: center;
-              color: #FFFFFF;
-              font-family: ui-monospace, monospace;
-              font-size: 10px;
-              font-weight: 800;
+              transform: translate(-50%, -50%);
+              pointer-events: auto;
+              z-index: ${isSelected ? 500 : 300};
             ">
-              ${isSource ? 'S' : isDest ? 'D' : idx}
+              <div style="
+                width: ${isSelected ? '32px' : '26px'};
+                height: ${isSelected ? '32px' : '26px'};
+                border-radius: 50%;
+                background: ${iconColor};
+                border: 2.5px solid #FFFFFF;
+                box-shadow: 0 0 ${isSelected ? '12px #10B981' : '6px rgba(0,0,0,0.5)'};
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #FFFFFF;
+                font-family: ui-monospace, monospace;
+                font-size: 11px;
+                font-weight: 900;
+              ">
+                ${isSelected ? '★' : 'E'}
+              </div>
+              <div style="
+                background: ${isSelected ? '#064E3B' : 'rgba(15, 23, 42, 0.95)'};
+                color: #FFFFFF;
+                padding: 2px 7px;
+                border-radius: 4px;
+                font-family: system-ui, sans-serif;
+                font-size: 9.5px;
+                font-weight: 800;
+                white-space: nowrap;
+                margin-top: 3px;
+                border: 1px solid ${isSelected ? '#10B981' : 'rgba(255,255,255,0.2)'};
+                box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+              ">
+                ${elp.id}: ${elp.name} ${isSelected ? ' (RECOVERY TARGET)' : ''}
+              </div>
             </div>
-            <div style="
-              background: rgba(15, 23, 42, 0.90);
-              color: #F8FAFC;
-              padding: 2px 6px;
-              border-radius: 4px;
-              font-family: system-ui, sans-serif;
-              font-size: 9px;
-              font-weight: 700;
-              white-space: nowrap;
-              margin-top: 2px;
-              border: 1px solid rgba(255,255,255,0.2);
-              box-shadow: 0 2px 4px rgba(0,0,0,0.35);
-            ">
-              ${labelBadge} &bull; ${wp.name.split('—')[0]}
+          `,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+
+        const marker = L.marker([elp.lat, elp.lon], { icon: elpIcon }).addTo(map);
+        marker.bindPopup(`
+          <div style="font-family: system-ui, sans-serif; font-size: 11px; padding: 2px;">
+            <strong style="color: ${iconColor}; font-size: 12px;">${elp.id} &bull; ${elp.name}</strong><br/>
+            <div style="margin-top: 4px; color: #475569;">
+              <span>Distance:</span> <b style="color: #0F172A;">${elp.distanceFromUavKm} km</b><br/>
+              <span>Reachability:</span> <b style="color: ${elp.reachable ? '#10B981' : '#EF4444'};">${elp.reachable ? 'REACHABLE' : 'UNREACHABLE'}</b><br/>
+              <span>Suitability:</span> <b style="color: #0F172A;">${elp.landingSuitability.replace(/_/g, ' ')}</b><br/>
+              <span>Risk:</span> <b style="color: #0F172A;">${elp.overallRisk}</b>
             </div>
           </div>
-        `,
-        iconSize: [26, 26],
-        iconAnchor: [13, 13]
+        `);
+        elpMarkersRef.current.push(marker);
       });
 
-      const marker = L.marker([wp.lat, wp.lon], { icon: wpIcon }).addTo(map);
-      marker.bindPopup(`
-        <div style="font-family: system-ui, sans-serif; font-size: 11px; padding: 2px;">
-          <strong style="color: ${bgColor}; font-size: 12px;">${wp.name}</strong><br/>
-          <div style="margin-top: 4px; color: #475569;">
-            <span>Target Altitude:</span> <b style="color: #0F172A;">${wp.altitudeFt} ft</b><br/>
-            <span>Target Airspeed:</span> <b style="color: #0F172A;">${wp.targetAirspeedKmh} km/h</b><br/>
-            <span>Coordinates:</span> <code style="color: #0284C7;">${wp.lat.toFixed(6)}°N, ${wp.lon.toFixed(6)}°E</code>
-          </div>
-        </div>
-      `);
-      waypointMarkersRef.current.push(marker);
-    });
-  }, [waypoints]);
+      // Update Emergency Diversion Polyline to Selected ELP
+      if (selectedELP && emergencyDivertLineRef.current) {
+        emergencyDivertLineRef.current.setLatLngs([
+          [uavPosition.lat, uavPosition.lon],
+          [selectedELP.lat, selectedELP.lon]
+        ]);
+      }
+    } else {
+      if (emergencyDivertLineRef.current) {
+        emergencyDivertLineRef.current.setLatLngs([]);
+      }
+    }
+  }, [waypoints, isEmergencyDivert, emergencyRecovery, selectedELP, uavPosition.lat, uavPosition.lon]);
 
   // --------------------------------------------------------------------------
   // 3. SWITCH MAP TILE STYLE
@@ -339,13 +441,13 @@ export const MissionMap: React.FC<MissionMapProps> = ({
       (iconWrapper.firstElementChild as HTMLElement).style.transform = `rotate(${currentHdg}deg)`;
     }
 
-    // Append to actual flight track polyline if moved >= 10 meters and engine is ON and not completed
+    // Append to actual flight track polyline
     const lastPos = lastTrackAppendPosRef.current;
     const dLatM = (currentLat - lastPos[0]) * 111320;
     const dLonM = (currentLon - lastPos[1]) * 111320 * Math.cos((currentLat * Math.PI) / 180);
     const distMovedM = Math.hypot(dLatM, dLonM);
 
-    if (distMovedM >= 10 && engineOn && !isCompleted) {
+    if (distMovedM >= 10 && engineOn && !isCompleted && !isRecovered) {
       lastTrackAppendPosRef.current = [currentLat, currentLon];
       actualTrackPointsRef.current.push([currentLat, currentLon]);
       if (actualTrackPointsRef.current.length > 1500) {
@@ -356,22 +458,16 @@ export const MissionMap: React.FC<MissionMapProps> = ({
       }
     }
 
-    // Reset track if at starting position with engine OFF
-    if (!engineOn && uavPosition.airspeed === 0 && waypoints.length > 0) {
-      const startWp = waypoints[0];
-      if (Math.abs(currentLat - startWp.lat) < 0.0005 && Math.abs(currentLon - startWp.lon) < 0.0005) {
-        if (actualTrackPointsRef.current.length > 2) {
-          actualTrackPointsRef.current = [[currentLat, currentLon]];
-          lastTrackAppendPosRef.current = [currentLat, currentLon];
-          if (actualTrackLineRef.current) {
-            actualTrackLineRef.current.setLatLngs(actualTrackPointsRef.current);
-          }
-        }
-      }
+    // Update Emergency Diversion Line Vector dynamically
+    if (isEmergencyDivert && selectedELP && emergencyDivertLineRef.current) {
+      emergencyDivertLineRef.current.setLatLngs([
+        [currentLat, currentLon],
+        [selectedELP.lat, selectedELP.lon]
+      ]);
     }
 
-    // Smooth Deadband Camera Tracking (Pans only when UAV drifts > 500m from center)
-    if (followUav && mapInstanceRef.current && !isCompleted) {
+    // Smooth Deadband Camera Tracking
+    if (followUav && mapInstanceRef.current && !isCompleted && !isRecovered) {
       const map = mapInstanceRef.current;
       const mapCenter = map.getCenter();
       const distFromCenterM = haversineDistanceKm(mapCenter.lat, mapCenter.lng, currentLat, currentLon) * 1000;
@@ -380,7 +476,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
         map.panTo([currentLat, currentLon], { animate: true, duration: 0.8 });
       }
     }
-  }, [uavPosition, followUav, engineOn, waypoints, isCompleted]);
+  }, [uavPosition, followUav, engineOn, isCompleted, isRecovered, isEmergencyDivert, selectedELP]);
 
   const handleCenterOnUAV = () => {
     if (mapInstanceRef.current) {
@@ -389,10 +485,16 @@ export const MissionMap: React.FC<MissionMapProps> = ({
   };
 
   const handleFitRouteBounds = () => {
-    if (mapInstanceRef.current && waypoints.length > 1) {
-      const bounds = L.latLngBounds(waypoints.map(w => [w.lat, w.lon]));
-      bounds.extend([uavPosition.lat, uavPosition.lon]);
-      mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], animate: true });
+    if (mapInstanceRef.current) {
+      const points: [number, number][] = waypoints.map(w => [w.lat, w.lon]);
+      points.push([uavPosition.lat, uavPosition.lon]);
+      if (selectedELP) {
+        points.push([selectedELP.lat, selectedELP.lon]);
+      }
+      if (points.length > 1) {
+        const bounds = L.latLngBounds(points);
+        mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], animate: true });
+      }
     }
   };
 
@@ -405,16 +507,21 @@ export const MissionMap: React.FC<MissionMapProps> = ({
         className="w-full h-full z-0"
       />
 
-      {/* 2. Top-Left: Map Header Bar & Selection Notification */}
+      {/* 2. Top-Left: Map Header Bar & Status */}
       <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
         <div className="bg-white/95 backdrop-blur-md px-3.5 py-2 rounded-lg border border-[#E5E7EB] shadow-md pointer-events-auto flex items-center gap-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#F97316] animate-pulse" />
+          <div className={`w-2.5 h-2.5 rounded-full ${isEmergencyDivert ? 'bg-rose-600 animate-ping' : 'bg-[#F97316] animate-pulse'}`} />
           <div>
-            <div className="text-xs font-black text-[#1F2937] tracking-tight uppercase">
-              GEOGRAPHIC FLIGHT MAP
+            <div className="text-xs font-black text-[#1F2937] tracking-tight uppercase flex items-center gap-1.5">
+              <span>GEOGRAPHIC FLIGHT MAP</span>
+              {isEmergencyDivert && (
+                <span className="bg-rose-600 text-white text-[9px] px-1.5 py-0.2 rounded font-mono font-bold">
+                  EMERGENCY DIVERT ACTIVE
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-[#6B7280]">
-              Real-World 2D Map &bull; Geodesic Navigation &bull; Virtual UAV
+              {isEmergencyDivert ? 'Diverting to Safest Emergency Landing Point (ELP)' : 'Real-World 2D Map • Geodesic Navigation • Virtual UAV'}
             </div>
           </div>
         </div>
@@ -429,7 +536,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
 
       {/* 3. Top-Right: Map Tile Controls & Navigation Buttons */}
       <div className="absolute top-4 right-4 z-[400] flex items-center gap-2">
-        {/* Layer Switcher (Street / Terrain / Satellite) */}
+        {/* Layer Switcher */}
         <div className="bg-white/95 backdrop-blur-md rounded-lg border border-[#E5E7EB] shadow-md p-1 flex items-center gap-1">
           <button
             onClick={() => setMapStyle('street')}
@@ -474,7 +581,7 @@ export const MissionMap: React.FC<MissionMapProps> = ({
           title="Smooth follow UAV on movement"
         >
           <LocateFixed className="w-3.5 h-3.5" />
-          <span>Follow UAV: {followUav ? 'ON' : 'OFF'}</span>
+          <span>Follow: {followUav ? 'ON' : 'OFF'}</span>
         </button>
 
         {/* Center / Fit Bounds / Zoom Controls */}
@@ -511,9 +618,34 @@ export const MissionMap: React.FC<MissionMapProps> = ({
         </div>
       </div>
 
-      {/* 4. Bottom-Right: Small Clean Information Panel (Requirement 13) */}
+      {/* 4. Bottom-Right: Tactical Information & Flight Status Panel */}
       <div className="absolute bottom-4 right-4 z-[400] max-w-sm">
-        {isCompleted ? (
+        {isRecovered ? (
+          <div className="bg-emerald-600 text-white rounded-xl p-4 shadow-xl border border-emerald-500 space-y-2 animate-in fade-in duration-300">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-100" />
+              <div>
+                <div className="text-xs font-black tracking-wider uppercase">
+                  MISSION RECOVERED
+                </div>
+                <div className="text-[11px] text-emerald-100 font-medium">
+                  Safe Emergency Touchdown Completed
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-emerald-500/50 text-[11px] font-mono">
+              <div>
+                <span className="text-emerald-200">LANDING SITE:</span> <b className="text-white">{selectedELP?.id || 'ELP-01'}</b>
+              </div>
+              <div>
+                <span className="text-emerald-200">STATUS:</span> <b className="text-white">RECOVERED</b>
+              </div>
+              <div className="col-span-2 truncate">
+                <span className="text-emerald-200">LOCATION:</span> <b className="text-white">{selectedELP?.name || 'Emergency Strip'}</b>
+              </div>
+            </div>
+          </div>
+        ) : isCompleted ? (
           <div className="bg-emerald-600 text-white rounded-xl p-4 shadow-xl border border-emerald-500 space-y-2 animate-in fade-in duration-300">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-100" />
@@ -542,15 +674,25 @@ export const MissionMap: React.FC<MissionMapProps> = ({
             </div>
           </div>
         ) : (
-          <div className="bg-slate-900/90 backdrop-blur-md text-white rounded-xl p-3.5 shadow-xl border border-slate-700/80 space-y-2 min-w-[260px]">
+          <div className={`backdrop-blur-md text-white rounded-xl p-3.5 shadow-xl border space-y-2 min-w-[260px] ${
+            isEmergencyDivert
+              ? 'bg-slate-950/95 border-rose-500/80 shadow-rose-950/40'
+              : 'bg-slate-900/90 border-slate-700/80'
+          }`}>
             <div className="flex items-center justify-between border-b border-slate-700/70 pb-2">
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${engineOn ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                <div className={`w-2 h-2 rounded-full ${
+                  isEmergencyDivert ? 'bg-rose-500 animate-ping' : engineOn ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                }`} />
                 <span className="text-[11px] font-black tracking-wider text-slate-200">
-                  MISSION: {engineOn ? 'IN PROGRESS' : 'STANDBY'}
+                  {isEmergencyDivert ? 'EMERGENCY DIVERT' : engineOn ? 'MISSION: IN PROGRESS' : 'MISSION: STANDBY'}
                 </span>
               </div>
-              <span className="text-[9.5px] font-mono font-bold bg-slate-800 text-orange-400 px-2 py-0.5 rounded border border-slate-700">
+              <span className={`text-[9.5px] font-mono font-bold px-2 py-0.5 rounded border ${
+                isEmergencyDivert
+                  ? 'bg-rose-900/80 text-rose-300 border-rose-600'
+                  : 'bg-slate-800 text-orange-400 border-slate-700'
+              }`}>
                 {flightPhase}
               </span>
             </div>
@@ -569,13 +711,15 @@ export const MissionMap: React.FC<MissionMapProps> = ({
                 <span className="font-bold text-amber-400">{currentHeading}°</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">REM DIST:</span>
-                <span className="font-bold text-emerald-400">{distRemaining.toFixed(1)} km</span>
+                <span className="text-slate-400">{isEmergencyDivert ? 'ELP DIST:' : 'REM DIST:'}</span>
+                <span className={`font-bold ${isEmergencyDivert ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {distRemaining.toFixed(1)} km
+                </span>
               </div>
             </div>
 
             <div className="pt-1.5 border-t border-slate-700/60 text-[10px] font-mono text-slate-400 flex items-center justify-between">
-              <span>COORDS:</span>
+              <span>{isEmergencyDivert && selectedELP ? `TARGET: ${selectedELP.id}` : 'COORDS:'}</span>
               <span className="text-slate-200">{uavPosition.lat.toFixed(4)}°N, {uavPosition.lon.toFixed(4)}°E</span>
             </div>
           </div>

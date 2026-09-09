@@ -57,7 +57,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     { step: 4, name: 'Takeoff & Initial Climb', desc: 'Climb vector established to 4,500 ft' },
     { step: 5, name: 'Waypoint Autopilot Engaged', desc: 'Geodesic corridor auto-tracking active' },
     { step: 6, name: 'Cruise Transit (6,500 ft)', desc: 'Level flight at 145 km/h TAS' },
-    { step: 7, name: 'Fault: Excessive Vibration', desc: 'Vibration rises (> 6.5 mm/s RMS)' },
+    { step: 7, name: 'Fault: Excessive Vibration', desc: 'Vibration rises (> 0.080 g RMS)' },
     { step: 8, name: 'Degradation & CAUTION Decision', desc: 'Power sag, Decision: CAUTION' },
     { step: 9, name: 'Severe Overheating -> NO-GO', desc: 'CHT > 175°C, Decision: NO-GO' },
     { step: 10, name: 'Clear Fault & Thermal Recovery', desc: 'SOH recovers (92%), Decision: GO' },

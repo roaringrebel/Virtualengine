@@ -3,6 +3,8 @@ export interface TelemetryPacket {
   simulation_id: string; // e.g. "SIM-ROTAX-001"
   sequence_number: number; // Monotonically increasing packet sequence
 
+  uav_id?: string; // e.g. "UAV-BHARAT-01"
+  engine_id?: string; // e.g. "ENG_001"
   aircraft: string; // "MALE_UAV"
   engine: string; // "ROTAX_912_ULS"
   flight_phase: string; // "CRUISE" | "TAKEOFF" | "CLIMB" | "DESCENT" | "LANDING" | "STANDBY" | "STARTUP"
@@ -15,12 +17,21 @@ export interface TelemetryPacket {
   oil_pressure: number; // Oil Pressure (bar)
   oil_temperature: number; // Oil Temp (°C)
   oil_temp?: number; // Alias for backward compatibility
-  vibration: number; // Vibration RMS (mm/s)
+  vibration: number; // Vibration RMS (g)
+  vibration_rms_g?: number; // Standardized vibration in g
+  vibration_peak_g?: number; // Peak vibration (g)
+  vibration_p2p_g?: number; // Peak-to-Peak (g)
+  vibration_crest_factor?: number; // Crest Factor
+  dominant_frequency_hz?: number; // FFT Dominant Peak (Hz)
+  spectral_energy?: number; // Total Spectral Energy
+  harmonic_1x_energy?: number; // 1X RPM harmonic
+  bearing_fault_energy?: number; // Bearing pass band
   fuel_flow: number; // Fuel Flow (L/h)
   fuel_pressure: number; // Fuel Pressure (bar)
   map: number; // Manifold Absolute Pressure (inHg)
   engine_condition?: number; // 0.0 - 1.0 internal health state
-  engine_status?: string; // "OFF" | "STARTING" | "IDLE" | "RUNNING" | "FAULT" | "STOPPING"
+  engine_status?: string; // "OFF" | "STARTING" | "CRANKING" | "IGNITION" | "IDLE" | "RUNNING" | "FAULT" | "STOPPING"
+  anomaly_flag?: boolean; // True when anomaly threshold exceeded
 
   // Flight Dynamics & Navigation Telemetry
   latitude: number; // °N (geodesic position)

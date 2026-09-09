@@ -16,7 +16,7 @@ export const DEMO_STAGES = [
   { step: 4, name: '4. Takeoff & Climb Phase', desc: 'Airspeed > 110 km/h, positive VSI climb towards 4,500 ft' },
   { step: 5, name: '5. Waypoint Auto Engaged', desc: 'Autopilot tracks planned route corridor (WP1 -> WP2 -> WP3)' },
   { step: 6, name: '6. Cruise & Route Progress', desc: 'Airspeed 145 km/h, planned route & cyan track active' },
-  { step: 7, name: '7. Inject Excessive Vibration', desc: 'Fault injected: high-order vibration > 6.5 mm/s RMS' },
+  { step: 7, name: '7. Inject Excessive Vibration', desc: 'Fault injected: high-order vibration > 0.080 g RMS' },
   { step: 8, name: '8. Power Sag & CAUTION', desc: 'Vib ↑, Condition ↓, Reliability 68%, Decision: CAUTION' },
   { step: 9, name: '9. Severe Anomaly & NO-GO', desc: 'High thermal load, Margin < 0, Decision: NO-GO' },
   { step: 10, name: '10. Clear Fault & Recovery', desc: 'Thermodynamics restore, Reliability 92%, Decision: GO' },
