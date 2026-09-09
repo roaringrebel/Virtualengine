@@ -1,0 +1,9 @@
+{
+  "seaLevelTempK": 288.15,
+  "seaLevelPressurePa": 101325,
+  "seaLevelDensityKgM3": 1.225,
+  "lapseRateKPerM": 0.0065,
+  "gasConstantJPerKgK": 287.05,
+  "gravityMPerS2": 9.80665,
+  "tropopauseAltitudeM": 11000
+}

@@ -1,0 +1,31 @@
+{
+  "engineModel": "Rotax 912 iS Sport",
+  "ratedPowerKw": 73.5,
+  "ratedRpm": 5800,
+  "idleRpm": 1400,
+  "displacementCc": 1352,
+  "cylinders": 4,
+  "coolingType": "Liquid-cooled cylinder heads, ram-air-cooled cylinders",
+  "limits": {
+    "maxRpm": 5800,
+    "continuousMaxRpm": 5500,
+    "maxChtC": 135.0,
+    "nominalChtC": 95.0,
+    "maxEgtC": 880.0,
+    "nominalEgtC": 740.0,
+    "minOilPressureBar": 1.5,
+    "maxOilPressureBar": 5.0,
+    "nominalOilPressureBar": 3.2,
+    "maxOilTempC": 130.0,
+    "nominalOilTempC": 90.0,
+    "nominalFuelFlowLph": 18.5,
+    "maxFuelFlowLph": 27.0
+  },
+  "thermalConstants": {
+    "cylinderThermalMassJPerK": 8500,
+    "oilThermalMassJPerK": 12000,
+    "coolantThermalMassJPerK": 15000,
+    "heatRejectionFraction": 0.32,
+    "radiatorEffectiveness": 0.85
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "airframeType": "Medium Altitude Long Endurance (MALE) UAV",
+  "wingspanM": 8.5,
+  "wingAreaM2": 9.2,
+  "emptyWeightKg": 320,
+  "maxTakeoffWeightKg": 550,
+  "fuelCapacityLiters": 120,
+  "dragPolar": {
+    "cd0": 0.024,
+    "oswaldEfficiency": 0.82,
+    "aspectRatio": 7.85
+  },
+  "aerodynamicLimits": {
+    "vStallKts": 48.0,
+    "vCruiseKts": 110.0,
+    "vNeKts": 165.0,
+    "maxCeilingM": 6000,
+    "maxClimbRateFpm": 1200,
+    "maxGForce": 3.8,
+    "minGForce": -1.5
+  }
+}
