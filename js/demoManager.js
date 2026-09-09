@@ -1,18 +1,19 @@
 /**
  * Automated Demo Mode Orchestrator
  * Runs scripted simulation sequence demonstrating nominal flight, progressive engine loading,
- * fault injection (Excessive Vibration), and live telemetry streaming to the Digital Twin.
+ * fault injection, and live telemetry streaming to the Digital Twin.
  */
 
 export class DemoManager {
-  constructor(physicsEngine, telemetryService, onStateUpdate) {
-    this.physics = physicsEngine;
+  constructor(pipeline, telemetryService, onStateUpdate) {
+    this.pipeline = pipeline;
     this.telemetry = telemetryService;
     this.onStateUpdate = onStateUpdate;
     this.isRunning = false;
     this.currentStep = 0;
     this.elapsedInStep = 0;
     this.timerId = null;
+    this.timeScale = 1.0;
 
     this.steps = [
       {
@@ -20,14 +21,14 @@ export class DemoManager {
         name: 'STAGE 1: NOMINAL CRUISE FLIGHT',
         description: 'UAV at 8,000 ft cruise, 70% throttle, balanced temperatures, nominal vibration (~2.1 mm/s).',
         duration: 8, // seconds
-        action: () => {
-          this.physics.setControl('flightPhase', 'CRUISE');
-          this.physics.setControl('throttle', 70);
-          this.physics.setControl('altitude', 8000);
-          this.physics.setControl('airspeed', 145);
-          this.physics.setControl('engineLoad', 50);
-          this.physics.setControl('ambientTemp', 15);
-          this.physics.setFault('NORMAL');
+        action: (controls) => {
+          controls.flightPhase = 'CRUISE';
+          controls.throttle = 70;
+          controls.altitude = 8000;
+          controls.airspeed = 145;
+          controls.engineLoad = 50;
+          controls.ambientTemp = 15;
+          this.pipeline.state.faultState.mode = 'NORMAL';
         }
       },
       {
@@ -35,12 +36,12 @@ export class DemoManager {
         name: 'STAGE 2: GRADUAL ENGINE LOAD INCREASE',
         description: 'Increasing throttle to 95% and engine load to 85%. MAP increases, fuel flow surges to ~28 L/h, CHT warms.',
         duration: 10,
-        action: () => {
-          this.physics.setControl('flightPhase', 'CLIMB');
-          this.physics.setControl('throttle', 95);
-          this.physics.setControl('altitude', 11500);
-          this.physics.setControl('airspeed', 165);
-          this.physics.setControl('engineLoad', 85);
+        action: (controls) => {
+          controls.flightPhase = 'CLIMB';
+          controls.throttle = 95;
+          controls.altitude = 11500;
+          controls.airspeed = 165;
+          controls.engineLoad = 85;
         }
       },
       {
@@ -48,8 +49,9 @@ export class DemoManager {
         name: 'STAGE 3: FAULT INJECTION (EXCESSIVE VIBRATION)',
         description: 'Injecting mechanical imbalance fault. Vibration jumps to >10 mm/s, RPM develops harmonic jitter, oil temperature creeps upward.',
         duration: 12,
-        action: () => {
-          this.physics.setFault('EXCESSIVE VIBRATION');
+        action: (controls) => {
+          this.pipeline.state.faultState.mode = 'EXCESSIVE VIBRATION';
+          this.pipeline.state.faultState.elapsed = 0;
         }
       },
       {
@@ -57,9 +59,8 @@ export class DemoManager {
         name: 'STAGE 4: SENSOR VALUE ANOMALY PROPAGATION',
         description: 'Vibration and thermal degradation propagate across all virtual sensors. Telemetry stream continuously dispatches packets.',
         duration: 10,
-        action: () => {
-          // Keep vibration fault active, increase load
-          this.physics.setControl('engineLoad', 90);
+        action: (controls) => {
+          controls.engineLoad = 90;
         }
       },
       {
@@ -67,22 +68,23 @@ export class DemoManager {
         name: 'STAGE 5: DEMO COMPLETE (LIVE STREAMING)',
         description: 'Demonstration sequence complete. Virtual engine continues streaming live anomalous telemetry to Digital Twin receiver.',
         duration: 5,
-        action: () => {
+        action: (controls) => {
           // Keep active
         }
       }
     ];
   }
 
-  startDemo() {
+  startDemo(controls) {
     this.stopDemo();
     this.isRunning = true;
     this.currentStep = 0;
     this.elapsedInStep = 0;
+    this.controls = controls;
 
     // Ensure telemetry streaming is turned on during demo
     if (!this.telemetry.isStreaming) {
-      this.telemetry.start(() => this.physics.getTelemetryPacket());
+      this.telemetry.start(() => this.pipeline.state.telemetry.packet);
     }
 
     this._executeCurrentStep();
@@ -121,7 +123,7 @@ export class DemoManager {
   _executeCurrentStep() {
     const step = this.steps[this.currentStep];
     if (step && step.action) {
-      step.action();
+      step.action(this.controls);
     }
   }
 

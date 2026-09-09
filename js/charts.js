@@ -3,6 +3,8 @@
  * High-performance Canvas 2D rolling graph renderer with threshold bands and glow aesthetics.
  */
 
+import { getSensorStatus } from './physicsEngine.js';
+
 export class TelemetryOscilloscope {
   constructor(canvasElement, options = {}) {
     this.canvas = canvasElement;
@@ -186,36 +188,23 @@ export class TelemetryGraphsManager {
     this.graphs[id] = new TelemetryOscilloscope(canvasElement, options);
   }
 
-  update(physicsState, physicsEngine) {
-    if (this.graphs.rpm) {
-      const status = physicsEngine.getSensorStatus('rpm', physicsState.rpm);
-      this.graphs.rpm.pushValue(physicsState.rpm, status);
-      this.graphs.rpm.render();
-    }
-    if (this.graphs.cht) {
-      const status = physicsEngine.getSensorStatus('cht', physicsState.cht);
-      this.graphs.cht.pushValue(physicsState.cht, status);
-      this.graphs.cht.render();
-    }
-    if (this.graphs.egt) {
-      const status = physicsEngine.getSensorStatus('egt', physicsState.egt);
-      this.graphs.egt.pushValue(physicsState.egt, status);
-      this.graphs.egt.render();
-    }
-    if (this.graphs.oilPressure) {
-      const status = physicsEngine.getSensorStatus('oilPressure', physicsState.oilPressure);
-      this.graphs.oilPressure.pushValue(physicsState.oilPressure, status);
-      this.graphs.oilPressure.render();
-    }
-    if (this.graphs.vibration) {
-      const status = physicsEngine.getSensorStatus('vibration', physicsState.vibration);
-      this.graphs.vibration.pushValue(physicsState.vibration, status);
-      this.graphs.vibration.render();
-    }
-    if (this.graphs.fuelFlow) {
-      const status = physicsEngine.getSensorStatus('fuelFlow', physicsState.fuelFlow);
-      this.graphs.fuelFlow.pushValue(physicsState.fuelFlow, status);
-      this.graphs.fuelFlow.render();
-    }
+  update(simulationState) {
+    const sensors = simulationState.sensors;
+
+    const updateGraph = (id) => {
+      if (this.graphs[id] && sensors[id]) {
+        const val = sensors[id].value;
+        const status = getSensorStatus(id, val);
+        this.graphs[id].pushValue(val, status);
+        this.graphs[id].render();
+      }
+    };
+
+    updateGraph('rpm');
+    updateGraph('cht');
+    updateGraph('egt');
+    updateGraph('oilPressure');
+    updateGraph('vibration');
+    updateGraph('fuelFlow');
   }
 }

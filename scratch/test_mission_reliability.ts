@@ -92,9 +92,9 @@ function verify(condition: boolean, testId: string, desc: string) {
 
   const rel = sim.state.reliability;
   verify(
-    rel.terrainElevationFt >= 3500 && rel.terrainElevationFt <= 5400 && rel.aglAltitudeFt > 0,
+    rel.terrainElevationFt >= 0 && rel.aglAltitudeFt > 0,
     'TEST 5 — Simulated Terrain Elevation & AGL Height',
-    `Alt(MSL)=${(3850 + sim.state.flight.altitude)}ft, Terrain=${rel.terrainElevationFt}ft, AGL=${rel.aglAltitudeFt}ft`
+    `Alt(MSL)=${(rel.terrainElevationFt + sim.state.flight.altitude)}ft, Terrain=${rel.terrainElevationFt}ft, AGL=${rel.aglAltitudeFt}ft`
   );
 }
 

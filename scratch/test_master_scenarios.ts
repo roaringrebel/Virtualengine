@@ -99,6 +99,8 @@ function assert(condition: boolean, testName: string, detail: string) {
 {
   const sim = new SimulationEngine();
   sim.setEngineOn(true);
+  sim.setControl('navigationMode', 'MANUAL_PILOT');
+  sim.setControl('airspeed', 100);
   sim.setControl('heading', 220);
   sim.update(0.1);
 
@@ -286,7 +288,7 @@ function assert(condition: boolean, testName: string, detail: string) {
 
   assert(
     !resetP.engine_on && resetP.rpm === 0 && resetP.altitude === 0 && resetP.airspeed === 0 &&
-    Math.abs(resetP.latitude - 32.5450) < 0.001 && Math.abs(resetP.longitude - 77.2150) < 0.001,
+    Math.abs(resetP.latitude - 16.4941) < 0.001 && Math.abs(resetP.longitude - 80.4982) < 0.001,
     'TEST M — Reset Simulation to Base',
     `EngineOn=${resetP.engine_on}, RPM=${resetP.rpm}, Alt=${resetP.altitude} ft, Pos=(${resetP.latitude}°N, ${resetP.longitude}°E)`
   );

@@ -42,6 +42,8 @@ function assert(condition: boolean, testName: string, detail: string) {
 {
   const sim = new SimulationEngine();
   sim.setEngineOn(true);
+  sim.setControl('navigationMode', 'MANUAL_PILOT');
+  sim.setControl('airspeed', 100);
   sim.setControl('heading', 223);
   sim.update(0.1);
   
@@ -99,7 +101,10 @@ function assert(condition: boolean, testName: string, detail: string) {
 {
   const sim = new SimulationEngine();
   sim.setEngineOn(true);
+  sim.setControl('navigationMode', 'MANUAL_PILOT');
   sim.setControl('altitude', 8000);
+  sim.setControl('throttle', 90);
+  sim.setControl('airspeed', 140);
   for (let i = 0; i < 30; i++) sim.update(0.1);
   const initialAlt = sim.getTelemetryPacket().altitude;
 
@@ -237,7 +242,7 @@ function assert(condition: boolean, testName: string, detail: string) {
   const resetPacket = sim.getTelemetryPacket();
 
   assert(
-    Math.abs(resetPacket.latitude - 32.5450) < 0.001 && Math.abs(resetPacket.longitude - 77.2150) < 0.001,
+    Math.abs(resetPacket.latitude - 16.4941) < 0.001 && Math.abs(resetPacket.longitude - 80.4982) < 0.001,
     'TEST 10 - Reset Simulation Coordinates',
     `Reset restored base position: (${resetPacket.latitude.toFixed(4)}°N, ${resetPacket.longitude.toFixed(4)}°E)`
   );

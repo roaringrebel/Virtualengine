@@ -4,19 +4,31 @@
  * Fault Injection Matrix, and REST Telemetry API Streaming.
  */
 
-import { AeroEnginePhysics } from './physicsEngine.js';
+import { SimulationPipeline } from './simulationPipeline.js';
 import { UAVVisualizer3D } from './uav3d.js';
 import { TelemetryGraphsManager } from './charts.js';
 import { TelemetryService } from './telemetryService.js';
 import { DemoManager } from './demoManager.js';
+import { sensorEnvelopes } from './physicsEngine.js';
 
 class VirtualUAVSimulatorApp {
   constructor() {
-    this.physics = new AeroEnginePhysics();
+    this.pipeline = new SimulationPipeline();
     this.graphs = new TelemetryGraphsManager();
     this.telemetry = null;
     this.uav3d = null;
     this.demo = null;
+
+    // Control State
+    this.controls = {
+      throttle: 70,
+      altitude: 8000,
+      airspeed: 145,
+      heading: 270,
+      ambientTemp: 15,
+      engineLoad: 50,
+      flightPhase: 'CRUISE'
+    };
 
     // Previous sensor readings for trend arrows
     this.prevSensorValues = {};
@@ -53,7 +65,7 @@ class VirtualUAVSimulatorApp {
 
     // 4. Initialize Demo Manager
     this.demo = new DemoManager(
-      this.physics,
+      this.pipeline,
       this.telemetry,
       (demoState) => this.updateDemoBanner(demoState)
     );
@@ -107,7 +119,7 @@ class VirtualUAVSimulatorApp {
     const sliderThrottle = document.getElementById('sliderThrottle');
     sliderThrottle.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('throttle', val);
+      this.controls.throttle = val;
       document.getElementById('valThrottle').textContent = val;
     });
 
@@ -115,7 +127,7 @@ class VirtualUAVSimulatorApp {
     const sliderLoad = document.getElementById('sliderLoad');
     sliderLoad.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('engineLoad', val);
+      this.controls.engineLoad = val;
       document.getElementById('valLoad').textContent = val;
     });
 
@@ -123,7 +135,7 @@ class VirtualUAVSimulatorApp {
     const sliderAltitude = document.getElementById('sliderAltitude');
     sliderAltitude.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('altitude', val);
+      this.controls.altitude = val;
       document.getElementById('valAltitude').textContent = val;
     });
 
@@ -131,7 +143,7 @@ class VirtualUAVSimulatorApp {
     const sliderAirspeed = document.getElementById('sliderAirspeed');
     sliderAirspeed.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('airspeed', val);
+      this.controls.airspeed = val;
       document.getElementById('valAirspeed').textContent = val;
     });
 
@@ -139,7 +151,7 @@ class VirtualUAVSimulatorApp {
     const sliderAmbient = document.getElementById('sliderAmbient');
     sliderAmbient.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('ambientTemp', val);
+      this.controls.ambientTemp = val;
       document.getElementById('valAmbient').textContent = val;
     });
 
@@ -147,7 +159,7 @@ class VirtualUAVSimulatorApp {
     const sliderHeading = document.getElementById('sliderHeading');
     sliderHeading.addEventListener('input', (e) => {
       const val = parseInt(e.target.value);
-      this.physics.setControl('heading', val);
+      this.controls.heading = val;
       document.getElementById('valHeading').textContent = val;
     });
 
@@ -158,14 +170,14 @@ class VirtualUAVSimulatorApp {
         phaseBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const phase = btn.getAttribute('data-phase');
-        this.physics.setControl('flightPhase', phase);
+        this.controls.flightPhase = phase;
         this.syncControlSliders();
       });
     });
   }
 
   syncControlSliders() {
-    const c = this.physics.controls;
+    const c = this.controls;
     document.getElementById('sliderThrottle').value = c.throttle;
     document.getElementById('valThrottle').textContent = c.throttle;
     document.getElementById('sliderLoad').value = c.engineLoad;
@@ -191,7 +203,8 @@ class VirtualUAVSimulatorApp {
   }
 
   setFault(faultName) {
-    this.physics.setFault(faultName);
+    this.pipeline.state.faultState.mode = faultName;
+    this.pipeline.state.faultState.elapsed = 0;
 
     // Update active button state
     const faultBtns = document.querySelectorAll('.fault-btn');
@@ -224,7 +237,7 @@ class VirtualUAVSimulatorApp {
       if (this.telemetry.isStreaming) {
         this.telemetry.stop();
       } else {
-        this.telemetry.start(() => this.physics.getTelemetryPacket());
+        this.telemetry.start(() => this.pipeline.state.telemetry.packet);
       }
     });
 
@@ -243,14 +256,14 @@ class VirtualUAVSimulatorApp {
     // Manual Ping
     const btnPing = document.getElementById('btnManualPing');
     btnPing.addEventListener('click', async () => {
-      const packet = this.physics.getTelemetryPacket();
+      const packet = this.pipeline.state.telemetry.packet;
       await this.telemetry.transmit(packet);
     });
 
     // Copy JSON
     const btnCopy = document.getElementById('btnCopyJson');
     btnCopy.addEventListener('click', () => {
-      const packet = this.physics.getTelemetryPacket();
+      const packet = this.pipeline.state.telemetry.packet;
       navigator.clipboard.writeText(JSON.stringify(packet, null, 2)).then(() => {
         const notice = document.getElementById('packetCopyNotice');
         notice.textContent = 'COPIED TO CLIPBOARD ✓';
@@ -277,7 +290,7 @@ class VirtualUAVSimulatorApp {
     // Run Demo
     const btnRunDemo = document.getElementById('btnRunDemo');
     btnRunDemo.addEventListener('click', () => {
-      this.demo.startDemo();
+      this.demo.startDemo(this.controls);
     });
 
     // Cancel Demo
@@ -290,13 +303,13 @@ class VirtualUAVSimulatorApp {
     const btnReset = document.getElementById('btnResetSim');
     btnReset.addEventListener('click', () => {
       if (this.demo.isRunning) this.demo.stopDemo();
-      this.physics.setControl('flightPhase', 'CRUISE');
-      this.physics.setControl('throttle', 70);
-      this.physics.setControl('altitude', 8000);
-      this.physics.setControl('airspeed', 145);
-      this.physics.setControl('heading', 270);
-      this.physics.setControl('ambientTemp', 15);
-      this.physics.setControl('engineLoad', 50);
+      this.controls.flightPhase = 'CRUISE';
+      this.controls.throttle = 70;
+      this.controls.altitude = 8000;
+      this.controls.airspeed = 145;
+      this.controls.heading = 270;
+      this.controls.ambientTemp = 15;
+      this.controls.engineLoad = 50;
       this.setFault('NORMAL');
       this.syncControlSliders();
     });
@@ -348,7 +361,9 @@ class VirtualUAVSimulatorApp {
 
     // Update JSON viewer display
     const jsonDisplay = document.getElementById('jsonPacketDisplay');
-    jsonDisplay.textContent = JSON.stringify(packet, null, 2);
+    if (jsonDisplay) {
+      jsonDisplay.textContent = JSON.stringify(packet, null, 2);
+    }
   }
 
   updateDemoBanner(demoState) {
@@ -375,12 +390,13 @@ class VirtualUAVSimulatorApp {
     const dt = Math.min(0.1, (timestamp - this.lastTime) / 1000);
     this.lastTime = timestamp;
 
-    // 1. Advance Physics Engine
-    this.physics.update(dt);
+    // 1. Advance Simulation Pipeline
+    const timeScale = this.demo && this.demo.timeScale || 1.0;
+    this.pipeline.tick(dt, this.controls, timeScale);
 
     // 2. Render 3D UAV
     if (this.uav3d) {
-      this.uav3d.render(this.physics.state, this.physics.controls);
+      this.uav3d.render(this.pipeline.state);
     }
 
     // 3. Update HUD & UI (at 30-60Hz)
@@ -389,14 +405,14 @@ class VirtualUAVSimulatorApp {
 
     // 4. Update Oscilloscope Graphs (throttled to 10Hz to save CPU)
     if (timestamp - this.lastGraphUpdateTime > 100) {
-      this.graphs.update(this.physics.state, this.physics);
+      this.graphs.update(this.pipeline.state);
       this.lastGraphUpdateTime = timestamp;
 
       // Update JSON preview if not streaming
       if (!this.telemetry.isStreaming) {
         const jsonDisplay = document.getElementById('jsonPacketDisplay');
         if (jsonDisplay) {
-          jsonDisplay.textContent = JSON.stringify(this.physics.getTelemetryPacket(), null, 2);
+          jsonDisplay.textContent = JSON.stringify(this.pipeline.state.telemetry.packet, null, 2);
         }
       }
     }
@@ -405,32 +421,31 @@ class VirtualUAVSimulatorApp {
   }
 
   updateHUD() {
-    const state = this.physics.state;
-    const controls = this.physics.controls;
+    const state = this.pipeline.state;
+    const controls = this.controls;
 
     document.getElementById('hudAirspeed').textContent = Math.round(controls.airspeed);
     document.getElementById('hudAltitude').textContent = Math.round(controls.altitude).toLocaleString();
     document.getElementById('hudHeading').textContent = Math.round(controls.heading);
     document.getElementById('hudThrottle').textContent = Math.round(controls.throttle);
-    document.getElementById('hudRPM').textContent = Math.round(state.rpm);
+    document.getElementById('hudRPM').textContent = Math.round(state.engineModel.rpm);
     document.getElementById('hudFlightPhase').textContent = controls.flightPhase;
-    document.getElementById('hudPitchAngle').textContent = `${state.pitch >= 0 ? '+' : ''}${state.pitch.toFixed(1)}°`;
+    document.getElementById('hudPitchAngle').textContent = `${state.flightModel.pitch >= 0 ? '+' : ''}${state.flightModel.pitch.toFixed(1)}°`;
   }
 
   updateSensorCards() {
-    const state = this.physics.state;
-    const envs = this.physics.sensorEnvelopes;
+    const state = this.pipeline.state;
 
     const sensorKeys = [
-      { key: 'rpm', val: Math.round(state.rpm), formatted: Math.round(state.rpm) },
-      { key: 'cht', val: state.cht, formatted: state.cht.toFixed(1) },
-      { key: 'egt', val: state.egt, formatted: state.egt.toFixed(1) },
-      { key: 'oilPressure', val: state.oilPressure, formatted: state.oilPressure.toFixed(1) },
-      { key: 'oilTemperature', val: state.oilTemperature, formatted: state.oilTemperature.toFixed(1) },
-      { key: 'vibration', val: state.vibration, formatted: state.vibration.toFixed(1) },
-      { key: 'fuelFlow', val: state.fuelFlow, formatted: state.fuelFlow.toFixed(1) },
-      { key: 'fuelPressure', val: state.fuelPressure, formatted: state.fuelPressure.toFixed(1) },
-      { key: 'map', val: state.map, formatted: state.map.toFixed(1) }
+      { key: 'rpm', val: Math.round(state.sensors.rpm.value), formatted: Math.round(state.sensors.rpm.value) },
+      { key: 'cht', val: state.sensors.cht.value, formatted: state.sensors.cht.value.toFixed(1) },
+      { key: 'egt', val: state.sensors.egt.value, formatted: state.sensors.egt.value.toFixed(1) },
+      { key: 'oilPressure', val: state.sensors.oilPressure.value, formatted: state.sensors.oilPressure.value.toFixed(1) },
+      { key: 'oilTemperature', val: state.sensors.oilTemperature.value, formatted: state.sensors.oilTemperature.value.toFixed(1) },
+      { key: 'vibration', val: state.sensors.vibration.value, formatted: state.sensors.vibration.value.toFixed(1) },
+      { key: 'fuelFlow', val: state.sensors.fuelFlow.value, formatted: state.sensors.fuelFlow.value.toFixed(1) },
+      { key: 'fuelPressure', val: state.sensors.fuelPressure.value, formatted: state.sensors.fuelPressure.value.toFixed(1) },
+      { key: 'map', val: state.sensors.map.value, formatted: state.sensors.map.value.toFixed(1) }
     ];
 
     sensorKeys.forEach(item => {
@@ -446,12 +461,12 @@ class VirtualUAVSimulatorApp {
       valEl.textContent = item.formatted;
 
       // Status
-      const status = this.physics.getSensorStatus(item.key, item.val);
+      const status = this.getSensorStatus(item.key, item.val);
       card.className = `sensor-card ${status}`;
       if (statusEl) statusEl.textContent = status.toUpperCase();
 
       // Gauge Bar %
-      const env = envs[item.key];
+      const env = sensorEnvelopes[item.key];
       if (env && barEl) {
         const pct = Math.max(0, Math.min(100, ((item.val - env.min) / (env.max - env.min)) * 100));
         barEl.style.width = `${pct}%`;
@@ -477,6 +492,14 @@ class VirtualUAVSimulatorApp {
         this.prevSensorValues[item.key] = item.val;
       }
     });
+  }
+
+  getSensorStatus(key, value) {
+    const env = sensorEnvelopes[key];
+    if (!env) return 'normal';
+    if (value <= env.critLow || value >= env.critHigh) return 'critical';
+    if (value <= env.warnLow || value >= env.warnHigh) return 'warning';
+    return 'normal';
   }
 }
 

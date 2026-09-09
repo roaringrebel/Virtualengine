@@ -483,18 +483,20 @@ export class UAVVisualizer3D {
    * Main Render Frame
    * Syncs UAV visual model with physical simulation state
    */
-  render(physicsState, physicsControls) {
+  render(simulationState) {
     if (this.is2DFallback) {
-      this.render2D(physicsState, physicsControls);
+      this.render2D(simulationState);
       return;
     }
 
     if (!this.renderer || !this.scene || !this.camera || !this.uavGroup) return;
 
     const dt = this.clock.getDelta();
+    const physicsState = simulationState.engineModel;
+    const physicsControls = simulationState.flightModel;
     const rpm = physicsState.rpm || 0;
-    const pitchDeg = physicsState.pitch || 0;
-    const rollDeg = physicsState.roll || 0;
+    const pitchDeg = simulationState.flightModel.pitch || 0;
+    const rollDeg = simulationState.flightModel.roll || 0;
     const vibration = physicsState.vibration || 1.0;
     const airspeed = physicsControls.airspeed || 145;
 
@@ -572,14 +574,14 @@ export class UAVVisualizer3D {
     this.renderer.render(this.scene, this.camera);
   }
 
-  render2D(physicsState, physicsControls) {
+  render2D(simulationState) {
     if (!this.ctx2D || !this.w2D || !this.h2D) return;
     const ctx = this.ctx2D;
     const w = this.w2D;
     const h = this.h2D;
-    const pitch = physicsState.pitch || 0;
-    const roll = physicsState.roll || 0;
-    const rpm = physicsState.rpm || 0;
+    const pitch = simulationState.flightModel.pitch || 0;
+    const roll = simulationState.flightModel.roll || 0;
+    const rpm = simulationState.engineModel.rpm || 0;
 
     ctx.clearRect(0, 0, w, h);
 

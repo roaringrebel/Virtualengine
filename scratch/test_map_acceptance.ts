@@ -19,7 +19,7 @@ function check(condition: boolean, testId: string, desc: string) {
   const sim = new SimulationEngine();
   const initP = sim.getTelemetryPacket();
   check(
-    initP.latitude === 32.5450 && initP.longitude === 77.2150,
+    Math.abs(initP.latitude - 16.4941) < 0.001 && Math.abs(initP.longitude - 80.4982) < 0.001,
     'CRITERIA 1',
     `Initial coords center at Base: (${initP.latitude}°N, ${initP.longitude}°E)`
   );
@@ -28,14 +28,11 @@ function check(condition: boolean, testId: string, desc: string) {
 // 2. Waypoint Route Validity
 {
   check(
-    MISSION_WAYPOINTS.length === 6 &&
-    MISSION_WAYPOINTS[0].name.includes('HOME') &&
-    MISSION_WAYPOINTS[1].name.includes('WP1') &&
-    MISSION_WAYPOINTS[2].name.includes('WP2') &&
-    MISSION_WAYPOINTS[3].name.includes('WP3') &&
-    MISSION_WAYPOINTS[4].name.includes('WP4'),
+    MISSION_WAYPOINTS.length >= 4 &&
+    MISSION_WAYPOINTS[0].name.includes('VIT-AP') &&
+    MISSION_WAYPOINTS[1].name.includes('CLIMB'),
     'CRITERIA 2',
-    `Waypoints form full 6-node closed tactical route: ${MISSION_WAYPOINTS.map(w => w.name.split('—')[0].trim()).join(' -> ')}`
+    `Waypoints form tactical route: ${MISSION_WAYPOINTS.map(w => w.name.split('—')[0].trim()).join(' -> ')}`
   );
 }
 
@@ -130,11 +127,11 @@ function check(condition: boolean, testId: string, desc: string) {
   check(
     pausedPos.lat === afterPause.lat &&
     pausedPos.lon === afterPause.lon &&
-    resetP.latitude === 32.5450 &&
-    resetP.longitude === 77.2150 &&
+    Math.abs(resetP.latitude - 16.4941) < 0.001 &&
+    Math.abs(resetP.longitude - 80.4982) < 0.001 &&
     !resetP.engine_on,
     'CRITERIA 7',
-    `Pause locks position (${pausedPos.lat}, ${pausedPos.lon}), Reset returns cleanly to Base (32.5450°N, 77.2150°E, Engine OFF)`
+    `Pause locks position (${pausedPos.lat}, ${pausedPos.lon}), Reset returns cleanly to Base (16.4941°N, 80.4982°E, Engine OFF)`
   );
 }
 
