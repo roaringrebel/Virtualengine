@@ -67,23 +67,43 @@ export function calculateRouteDeviationKm(
 }
 
 /**
- * Model-Based Mission Reliability, Health Assessment, Dynamic Degradation & ELP Recovery Engine
+ * Authoritative Mission Reliability & Digital Twin Assessment Engine
+ * 
+ * Implements a deterministic, explainable composite reliability formula:
+ * Reliability Score = 0.35 * Health + 0.25 * Risk + 0.20 * Endurance + 0.10 * Anomaly + 0.10 * FaultSeverity
+ * 
+ * Features:
+ * - Frozen / Standby state while parked (no recalculations or random noise before mission start)
+ * - Activates only when mission starts (missionStarted / engineOn)
+ * - Dynamic SOH and RUL degradation models driven genuinely by physical state
+ * - Bounded EMA smoothing preventing jumpy percentage changes
+ * - Complete freeze upon mission completion or emergency recovery touchdown
  */
 export class ReliabilityModel {
   public criticalPersistenceSeconds: number = 0;
   public static readonly CRITICAL_PERSISTENCE_MAX_SEC = 30;
   public static readonly CRUISE_SPEED_KMH = 145.0;
 
-  // Dynamic Cumulative Degradation & Prognostics
+  // Internal smooth state trackers
   private cumulativeWearPercent: number = 0;
+  private smoothedSoh: number = 99.0;
   private smoothedRulHours: number = 240.0;
+  private smoothedReliability: number = 98.0;
   private isInitialized: boolean = false;
+  private isFrozenOnCompletion: boolean = false;
+  private frozenState: MissionReliabilityState | null = null;
+  private runningTimeSeconds: number = 0;
 
   public reset(): void {
     this.criticalPersistenceSeconds = 0;
     this.cumulativeWearPercent = 0;
+    this.smoothedSoh = 99.0;
     this.smoothedRulHours = 240.0;
+    this.smoothedReliability = 98.0;
     this.isInitialized = false;
+    this.isFrozenOnCompletion = false;
+    this.frozenState = null;
+    this.runningTimeSeconds = 0;
   }
 
   public calculate(
@@ -111,105 +131,7 @@ export class ReliabilityModel {
       flight.currentWaypointIndex
     );
 
-    // 3. Dynamic Physics-Informed Degradation & SOH Engine
-    if (engineOn) {
-      // Continuous operational wear rate (% per second)
-      let wearRatePerSec = 0.0001; // baseline nominal mechanical wear
-
-      if (engine.vibration > 0.045) {
-        wearRatePerSec += (engine.vibration - 0.045) * 0.12;
-      }
-      if (thermal.cht > 125) {
-        wearRatePerSec += (thermal.cht - 125) * 0.003;
-      }
-      if (thermal.oilTemperature > 115) {
-        wearRatePerSec += (thermal.oilTemperature - 115) * 0.002;
-      }
-      if (thermal.oilPressure < 2.0 && thermal.oilPressure > 0) {
-        wearRatePerSec += (2.0 - thermal.oilPressure) * 0.08;
-      }
-      if (fault.activeFault !== 'NORMAL') {
-        const sevRate = fault.severity === 'LOW' ? 0.02 : fault.severity === 'MEDIUM' ? 0.08 : fault.severity === 'HIGH' ? 0.22 : 0.45;
-        wearRatePerSec += sevRate;
-      }
-
-      this.cumulativeWearPercent = Math.min(85, this.cumulativeWearPercent + wearRatePerSec * dt);
-    }
-
-    // Instantaneous SOH calculation (combining base condition, cumulative degradation, and active fault penalty)
-    let rawSoh = (engine.engineCondition * 100) - this.cumulativeWearPercent;
-
-    if (engine.vibration > 0.045) {
-      rawSoh -= Math.min(25, (engine.vibration - 0.045) * 350);
-    }
-    if (thermal.cht > 130) {
-      rawSoh -= Math.min(30, (thermal.cht - 130) * 0.70);
-    }
-    if (thermal.oilTemperature > 120) {
-      rawSoh -= Math.min(20, (thermal.oilTemperature - 120) * 0.80);
-    }
-    if (engineOn && thermal.oilPressure < 2.0) {
-      rawSoh -= Math.min(35, (2.0 - thermal.oilPressure) * 20);
-    }
-    if (fault.activeFault !== 'NORMAL') {
-      const severityMult = fault.severity === 'LOW' ? 8 : fault.severity === 'MEDIUM' ? 18 : fault.severity === 'HIGH' ? 38 : 50;
-      rawSoh -= severityMult;
-    }
-
-    const engineSOH = Math.round(Math.max(1, Math.min(99, rawSoh)));
-
-    // 4. Prognostic RUL (Hours) with Smooth Exponential Moving Average
-    let rawRulHours = 240.0;
-    if (engineSOH >= 85) {
-      rawRulHours = 120 + (engineSOH - 85) * 8.0;
-    } else if (engineSOH >= 65) {
-      rawRulHours = 30 + (engineSOH - 65) * 4.5; // e.g. SOH 74 -> 70.5 h RUL
-    } else if (engineSOH >= 45) {
-      rawRulHours = 8 + (engineSOH - 45) * 1.1;
-    } else if (engineSOH >= 25) {
-      rawRulHours = 1.5 + (engineSOH - 25) * 0.325; // e.g. SOH 32 -> 3.7 h RUL
-    } else if (engineSOH >= 10) {
-      rawRulHours = 0.2 + (engineSOH - 10) * 0.086;
-    } else {
-      rawRulHours = Math.max(0.05, (engineSOH / 10.0) * 0.18); // e.g. SOH 5 -> 0.09 h RUL
-    }
-
-    if (!this.isInitialized) {
-      this.smoothedRulHours = rawRulHours;
-      this.isInitialized = true;
-    } else {
-      const smoothingAlpha = Math.min(1.0, dt * 1.2);
-      this.smoothedRulHours += (rawRulHours - this.smoothedRulHours) * smoothingAlpha;
-    }
-
-    const rulHours = Number(this.smoothedRulHours.toFixed(2));
-
-    // 5. Fault Risk (%)
-    let faultRiskPercent = 3;
-    if (fault.activeFault !== 'NORMAL') {
-      if (fault.severity === 'LOW') faultRiskPercent = 20;
-      else if (fault.severity === 'MEDIUM') faultRiskPercent = 45;
-      else if (fault.severity === 'HIGH') faultRiskPercent = 75;
-      else faultRiskPercent = 90;
-    }
-    if (engine.vibration > 0.060) faultRiskPercent = Math.max(faultRiskPercent, 55);
-    if (thermal.cht > 145) faultRiskPercent = Math.max(faultRiskPercent, 70);
-    if (engineOn && thermal.oilPressure < 1.8) faultRiskPercent = Math.max(faultRiskPercent, 70);
-    faultRiskPercent = Math.min(99, Math.max(1, faultRiskPercent));
-
-    // 6. Sensor Anomaly Score (0.0 to 1.0)
-    let anomaly = 0.04;
-    if (engine.vibration > 0.040) anomaly += Math.min(0.35, (engine.vibration - 0.040) * 7.0);
-    if (thermal.cht > 115) anomaly += Math.min(0.30, (thermal.cht - 115) / 50.0);
-    if (thermal.oilTemperature > 110) anomaly += Math.min(0.20, (thermal.oilTemperature - 110) / 40.0);
-    if (engineOn && thermal.oilPressure < 2.2) anomaly += Math.min(0.30, (2.2 - thermal.oilPressure) / 1.5);
-    if (engineOn && engine.fuelPressure < 2.2) anomaly += Math.min(0.30, (2.2 - engine.fuelPressure) / 1.5);
-    if (fault.activeFault !== 'NORMAL') {
-      anomaly += fault.severity === 'LOW' ? 0.18 : fault.severity === 'MEDIUM' ? 0.35 : fault.severity === 'HIGH' ? 0.55 : 0.70;
-    }
-    const anomalyScore = Number(Math.min(0.98, Math.max(0.02, anomaly)).toFixed(2));
-
-    // 7. ONE Authoritative Total Mission Distance & Demand
+    // 3. ONE Authoritative Total Mission Distance & Demand
     let totalMissionDistKm = 0;
     for (let i = 0; i < activeWaypoints.length - 1; i++) {
       totalMissionDistKm += haversineDistanceKm(
@@ -223,8 +145,6 @@ export class ReliabilityModel {
 
     const estimatedFlightTimeMinutes = Math.max(1, Math.round((totalMissionDistKm / ReliabilityModel.CRUISE_SPEED_KMH) * 60));
     const missionDemandHours = Number((estimatedFlightTimeMinutes / 60.0).toFixed(2));
-    const rulMarginHours = Number((rulHours - missionDemandHours).toFixed(2));
-    const missionMarginHours = rulMarginHours;
 
     // Dynamic distance remaining from current position
     let distRemainingKm = 0;
@@ -260,9 +180,265 @@ export class ReliabilityModel {
     const elapsedSec = Math.floor(simTimeSeconds % 60);
     const missionTimeFormatted = `${String(elapsedMin).padStart(2, '0')}:${String(elapsedSec).padStart(2, '0')}`;
 
-    // 8. Individual Multi-Gate Safety & Prognostic Checks
+    // Completion / Landed Check
+    const isCompleted = Boolean(flight.isCompleted || flight.missionProgressPercent >= 100 || flight.flightPhase === 'COMPLETED' || flight.flightPhase === 'RECOVERED');
 
-    // GATE A: ENDURANCE CHECK (RUL Prognostic Feasibility)
+    if (isCompleted && this.frozenState) {
+      return {
+        ...this.frozenState,
+        missionProgressPercent: 100,
+        distanceRemainingKm: 0,
+        timeRemainingSeconds: 0,
+        timeRemainingFormatted: '00:00',
+        missionTimeFormatted,
+        isCompleted: true,
+        missionStatus: 'COMPLETED'
+      };
+    }
+
+    // =========================================================================
+    // SECTION A: PARKED / STANDBY STATE (BEFORE MISSION START)
+    // =========================================================================
+    const isParked = !engineOn || flight.flightPhase === 'PARKED' || flight.flightPhase === 'STANDBY';
+
+    if (isParked) {
+      this.criticalPersistenceSeconds = 0;
+      this.cumulativeWearPercent = 0;
+      this.smoothedSoh = 99.0;
+      this.smoothedRulHours = 240.0;
+      this.smoothedReliability = 98.0;
+      this.runningTimeSeconds = 0;
+
+      const baseRulMargin = Number((240.0 - missionDemandHours).toFixed(2));
+
+      return {
+        reliabilityScore: 99, // baseline number, UI shows READY / -- when isParked is true
+        riskLevel: 'LOW',
+        decision: 'GO',
+        decisionReason: 'Engine in standby. Reliability assessment will activate when the mission starts.',
+        engineSOH: 99,
+        rulHours: 240.0,
+        faultRiskPercent: 0,
+        missionMarginHours: baseRulMargin,
+        rulMarginHours: baseRulMargin,
+        totalMissionDistanceKm: totalMissionDistKm,
+        estimatedFlightTimeMinutes,
+        missionDemandHours,
+        enduranceCheck: {
+          status: 'PASS',
+          requiredHours: missionDemandHours,
+          rulHours: 240.0,
+          marginHours: baseRulMargin,
+          details: 'READY'
+        },
+        healthCheck: {
+          status: 'NORMAL',
+          faultName: 'NORMAL',
+          faultSeverity: 'NONE',
+          details: 'BASELINE'
+        },
+        riskCheck: {
+          status: 'PASS',
+          riskScorePercent: 0,
+          details: 'NOT ACTIVE'
+        },
+        criticalPersistenceSeconds: 0,
+        criticalPersistenceMaxSeconds: ReliabilityModel.CRITICAL_PERSISTENCE_MAX_SEC,
+        emergencyRecoveryTriggered: false,
+        anomalyScore: 0.00,
+        missionProgressPercent: 0,
+        distanceRemainingKm: totalMissionDistKm,
+        timeRemainingSeconds: Math.round(missionDemandHours * 3600),
+        timeRemainingFormatted,
+        missionTimeFormatted: '00:00',
+        terrainElevationFt: terrainElevFt,
+        aglAltitudeFt: 0,
+        routeDeviationKm: 0,
+        isParked: true,
+        isCompleted: false,
+        missionStatus: 'STANDBY'
+      };
+    }
+
+    // =========================================================================
+    // SECTION B: ACTIVE MISSION ASSESSMENT (ACTIVATES UPON ENGINE/MISSION START)
+    // =========================================================================
+    this.runningTimeSeconds += dt;
+    const isWarmedUp = this.runningTimeSeconds > 2.5 && engine.rpm > 1200;
+    const hasActiveFault = fault.activeFault !== 'NORMAL';
+
+    // 1. Dynamic Cumulative Wear & Physical Degradation Engine
+    let wearRatePerSec = 0.0001; // nominal baseline mechanical wear rate
+
+    if (engine.vibration > 0.055) {
+      wearRatePerSec += (engine.vibration - 0.055) * 0.10;
+    }
+    if (thermal.cht > 125) {
+      wearRatePerSec += (thermal.cht - 125) * 0.003;
+    }
+    if (thermal.oilTemperature > 115) {
+      wearRatePerSec += (thermal.oilTemperature - 115) * 0.002;
+    }
+    if (isWarmedUp && thermal.oilPressure < 2.0 && thermal.oilPressure > 0) {
+      wearRatePerSec += (2.0 - thermal.oilPressure) * 0.08;
+    }
+    if (hasActiveFault) {
+      const sevRate = fault.severity === 'LOW' ? 0.015 : fault.severity === 'MEDIUM' ? 0.06 : fault.severity === 'HIGH' ? 0.20 : 0.40;
+      wearRatePerSec += sevRate;
+    }
+
+    this.cumulativeWearPercent = Math.min(85, this.cumulativeWearPercent + wearRatePerSec * dt);
+
+    // Instantaneous SOH calculation with physical sensitivity
+    let rawSoh = (engine.engineCondition * 100) - this.cumulativeWearPercent;
+
+    if (engine.vibration > 0.055) {
+      rawSoh -= Math.min(25, (engine.vibration - 0.055) * 350);
+    }
+    if (thermal.cht > 130) {
+      rawSoh -= Math.min(30, (thermal.cht - 130) * 0.70);
+    }
+    if (thermal.oilTemperature > 120) {
+      rawSoh -= Math.min(20, (thermal.oilTemperature - 120) * 0.80);
+    }
+    if (isWarmedUp && thermal.oilPressure < 2.0) {
+      rawSoh -= Math.min(35, (2.0 - thermal.oilPressure) * 20);
+    }
+    if (hasActiveFault) {
+      const severityMult = fault.severity === 'LOW' ? 6 : fault.severity === 'MEDIUM' ? 16 : fault.severity === 'HIGH' ? 36 : 50;
+      rawSoh -= severityMult;
+    }
+
+    const targetSoh = Math.max(1, Math.min(99, rawSoh));
+    const sohAlpha = Math.min(1.0, dt * 1.5);
+    this.smoothedSoh += (targetSoh - this.smoothedSoh) * sohAlpha;
+    const engineSOH = Math.round(this.smoothedSoh);
+
+    // 2. Dynamic Prognostic RUL (Hours)
+    let rawRulHours = 240.0;
+    if (engineSOH >= 85) {
+      rawRulHours = 120 + (engineSOH - 85) * 8.0; // 120 - 232 h
+    } else if (engineSOH >= 65) {
+      rawRulHours = 30 + (engineSOH - 65) * 4.5;  // 30 - 120 h
+    } else if (engineSOH >= 45) {
+      rawRulHours = 8 + (engineSOH - 45) * 1.1;   // 8 - 30 h
+    } else if (engineSOH >= 25) {
+      rawRulHours = 1.5 + (engineSOH - 25) * 0.325; // 1.5 - 8 h
+    } else if (engineSOH >= 10) {
+      rawRulHours = 0.2 + (engineSOH - 10) * 0.086; // 0.2 - 1.5 h
+    } else {
+      rawRulHours = Math.max(0.05, (engineSOH / 10.0) * 0.18);
+    }
+
+    // Subtract actual active engine running hours
+    const missionElapsedHours = simTimeSeconds / 3600.0;
+    rawRulHours = Math.max(0.05, rawRulHours - missionElapsedHours);
+
+    if (!this.isInitialized) {
+      this.smoothedRulHours = rawRulHours;
+      this.smoothedReliability = 98.0;
+      this.isInitialized = true;
+    } else {
+      const rulAlpha = Math.min(1.0, dt * 1.0);
+      this.smoothedRulHours += (rawRulHours - this.smoothedRulHours) * rulAlpha;
+    }
+
+    const rulHours = Number(this.smoothedRulHours.toFixed(2));
+    const rulMarginHours = Number((rulHours - missionDemandHours).toFixed(2));
+    const missionMarginHours = rulMarginHours;
+
+    // 3. Deterministic Fault Risk (%)
+    let faultRiskPercent = 3;
+    if (hasActiveFault) {
+      if (fault.severity === 'LOW') faultRiskPercent = 20;
+      else if (fault.severity === 'MEDIUM') faultRiskPercent = 45;
+      else if (fault.severity === 'HIGH') faultRiskPercent = 75;
+      else faultRiskPercent = 90;
+    }
+    if (engine.vibration > 0.075) faultRiskPercent = Math.max(faultRiskPercent, 55);
+    if (thermal.cht > 145) faultRiskPercent = Math.max(faultRiskPercent, 70);
+    if (isWarmedUp && thermal.oilPressure < 1.8) faultRiskPercent = Math.max(faultRiskPercent, 70);
+    faultRiskPercent = Math.min(99, Math.max(1, faultRiskPercent));
+
+    // 4. Deterministic Sensor Anomaly Score (0.00 to 1.00)
+    let anomaly = 0.03;
+    if (engine.vibration > 0.052) anomaly += Math.min(0.35, (engine.vibration - 0.052) * 6.0);
+    if (thermal.cht > 115) anomaly += Math.min(0.25, (thermal.cht - 115) / 45.0);
+    if (thermal.oilTemperature > 110) anomaly += Math.min(0.20, (thermal.oilTemperature - 110) / 35.0);
+    if (isWarmedUp && thermal.oilPressure < 2.5) anomaly += Math.min(0.25, (2.5 - thermal.oilPressure) / 1.5);
+    if (isWarmedUp && engine.fuelPressure < 2.5) anomaly += Math.min(0.25, (2.5 - engine.fuelPressure) / 1.5);
+    if (hasActiveFault) {
+      anomaly += fault.severity === 'LOW' ? 0.18 : fault.severity === 'MEDIUM' ? 0.35 : fault.severity === 'HIGH' ? 0.55 : 0.70;
+    }
+    const anomalyScore = Number(Math.min(0.98, Math.max(0.02, anomaly)).toFixed(2));
+
+    // 5. Multi-Gate Health Classification
+    const isCriticalHealth = (
+      (hasActiveFault && (
+        fault.severity === 'CRITICAL' ||
+        (fault.severity === 'HIGH' && (
+          fault.activeFault === 'EXCESSIVE_VIBRATION' ||
+          fault.activeFault === 'OVERHEATING' ||
+          fault.activeFault === 'LOW_OIL_PRESSURE' ||
+          fault.activeFault === 'MECHANICAL_FAULT'
+        ))
+      )) ||
+      (isWarmedUp && thermal.oilPressure < 1.2) ||
+      thermal.cht > 155 ||
+      thermal.oilTemperature > 140 ||
+      engine.vibration > 0.110 ||
+      (isWarmedUp && engine.fuelPressure < 0.8) ||
+      engineSOH < 25
+    );
+
+    const isDegradedHealth = !isCriticalHealth && (
+      (hasActiveFault && (
+        fault.severity === 'MEDIUM' ||
+        (fault.severity === 'HIGH' && (
+          fault.activeFault === 'FUEL_PRESSURE_DROP' ||
+          fault.activeFault === 'COOLING_PROBLEM' ||
+          fault.activeFault === 'HIGH_CHT' ||
+          fault.activeFault === 'RPM_INSTABILITY' ||
+          fault.activeFault === 'BEARING_FAULT'
+        ))
+      )) ||
+      thermal.cht > 125 ||
+      thermal.oilTemperature > 120 ||
+      (isWarmedUp && thermal.oilPressure < 1.8) ||
+      engine.vibration > 0.075 ||
+      (isWarmedUp && engine.fuelPressure < 1.5) ||
+      engineSOH < 60 ||
+      anomalyScore >= 0.45
+    );
+
+    const isWarningHealth = !isCriticalHealth && !isDegradedHealth && (
+      hasActiveFault ||
+      thermal.cht > 115 ||
+      thermal.oilTemperature > 110 ||
+      (isWarmedUp && thermal.oilPressure < 2.4) ||
+      engine.vibration > 0.052 ||
+      (isWarmedUp && engine.fuelPressure < 2.4) ||
+      engineSOH < 80 ||
+      anomalyScore >= 0.20
+    );
+
+    let healthStatus: 'NORMAL' | 'PASS' | 'WARNING' | 'DEGRADED' | 'FAIL' | 'CRITICAL' = 'PASS';
+    let healthDetails = 'All engine health parameters nominal';
+    if (isCriticalHealth) {
+      healthStatus = 'CRITICAL';
+      const faultLabel = !hasActiveFault ? 'Critical Sensor Threshold' : fault.activeFault.replace(/_/g, ' ');
+      healthDetails = `Critical propulsion anomaly (${faultLabel})`;
+    } else if (isDegradedHealth) {
+      healthStatus = 'DEGRADED';
+      const faultLabel = !hasActiveFault ? 'Thermal/Vibration Elevation' : fault.activeFault.replace(/_/g, ' ');
+      healthDetails = `Degraded health state (${faultLabel})`;
+    } else if (isWarningHealth) {
+      healthStatus = 'WARNING';
+      const faultLabel = !hasActiveFault ? 'Parameter Drift' : fault.activeFault.replace(/_/g, ' ');
+      healthDetails = `Low-severity ${faultLabel.toLowerCase()} anomaly`;
+    }
+
+    // Endurance Gate
     let enduranceStatus: 'PASS' | 'MARGINAL' | 'FAIL' = 'PASS';
     let enduranceDetails = `Adequate margin (+${rulMarginHours >= 0 ? '+' : ''}${rulMarginHours} h)`;
     if (rulHours < missionDemandHours) {
@@ -273,73 +449,11 @@ export class ReliabilityModel {
       enduranceDetails = `Tight margin (+${rulMarginHours} h)`;
     }
 
-    // GATE B: CURRENT OPERATING HEALTH CHECK
-    const isCriticalHealth = (
-      (fault.severity === 'CRITICAL') ||
-      (fault.severity === 'HIGH' && (
-        fault.activeFault === 'EXCESSIVE_VIBRATION' ||
-        fault.activeFault === 'OVERHEATING' ||
-        fault.activeFault === 'LOW_OIL_PRESSURE' ||
-        fault.activeFault === 'MECHANICAL_FAULT'
-      )) ||
-      (engineOn && thermal.oilPressure < 1.3) ||
-      thermal.cht > 155 ||
-      thermal.oilTemperature > 135 ||
-      engine.vibration > 0.090 ||
-      (engineOn && engine.fuelPressure < 0.9) ||
-      engineSOH < 25
-    );
-
-    const isDegradedHealth = !isCriticalHealth && (
-      fault.severity === 'MEDIUM' ||
-      (fault.severity === 'HIGH' && (
-        fault.activeFault === 'FUEL_PRESSURE_DROP' ||
-        fault.activeFault === 'COOLING_PROBLEM' ||
-        fault.activeFault === 'HIGH_CHT' ||
-        fault.activeFault === 'RPM_INSTABILITY' ||
-        fault.activeFault === 'BEARING_FAULT'
-      )) ||
-      thermal.cht > 125 ||
-      thermal.oilTemperature > 118 ||
-      (engineOn && thermal.oilPressure < 1.9) ||
-      engine.vibration > 0.060 ||
-      (engineOn && engine.fuelPressure < 1.6) ||
-      engineSOH < 60 ||
-      anomalyScore >= 0.40
-    );
-
-    const isWarningHealth = !isCriticalHealth && !isDegradedHealth && (
-      fault.activeFault !== 'NORMAL' ||
-      thermal.cht > 115 ||
-      thermal.oilTemperature > 108 ||
-      (engineOn && thermal.oilPressure < 2.3) ||
-      engine.vibration > 0.045 ||
-      (engineOn && engine.fuelPressure < 2.3) ||
-      engineSOH < 80 ||
-      anomalyScore >= 0.20
-    );
-
-    let healthStatus: 'NORMAL' | 'PASS' | 'WARNING' | 'DEGRADED' | 'FAIL' | 'CRITICAL' = 'PASS';
-    let healthDetails = 'All engine health parameters nominal';
-    if (isCriticalHealth) {
-      healthStatus = 'CRITICAL';
-      const faultLabel = fault.activeFault === 'NORMAL' ? 'Critical Sensor Threshold' : fault.activeFault.replace(/_/g, ' ');
-      healthDetails = `Critical propulsion anomaly (${faultLabel})`;
-    } else if (isDegradedHealth) {
-      healthStatus = 'DEGRADED';
-      const faultLabel = fault.activeFault === 'NORMAL' ? 'Thermal/Vibration Elevation' : fault.activeFault.replace(/_/g, ' ');
-      healthDetails = `Degraded health state (${faultLabel})`;
-    } else if (isWarningHealth) {
-      healthStatus = 'WARNING';
-      const faultLabel = fault.activeFault === 'NORMAL' ? 'Parameter Drift' : fault.activeFault.replace(/_/g, ' ');
-      healthDetails = `Low-severity ${faultLabel.toLowerCase()} anomaly`;
-    }
-
-    // GATE C: MISSION RISK ASSESSMENT
+    // Risk Gate
     let riskLevel: MissionRisk = 'LOW';
     if (isCriticalHealth || rulMarginHours < 0 || faultRiskPercent >= 75) {
       riskLevel = 'CRITICAL';
-    } else if (isDegradedHealth && (rulMarginHours < 0.5 || faultRiskPercent >= 50 || fault.severity === 'HIGH')) {
+    } else if (isDegradedHealth && (rulMarginHours < 0.5 || faultRiskPercent >= 50 || (hasActiveFault && fault.severity === 'HIGH'))) {
       riskLevel = 'HIGH';
     } else if (isDegradedHealth || isWarningHealth || faultRiskPercent >= 20 || anomalyScore >= 0.20 || rulMarginHours < 0.5) {
       riskLevel = 'MEDIUM';
@@ -357,9 +471,7 @@ export class ReliabilityModel {
       riskDetails = `Elevated operational risk (${faultRiskPercent}%)`;
     }
 
-    // 9. Flight Phase Recognition & Continuous In-Flight Persistence Tracker
-    const isCompleted = Boolean(flight.isCompleted || flight.missionProgressPercent >= 100 || flight.flightPhase === 'COMPLETED' || flight.flightPhase === 'RECOVERED');
-
+    // 6. In-Flight Critical Persistence & Emergency Recovery
     const isAirborne = engineOn && !isCompleted && (
       flight.flightPhase === 'TAKEOFF' ||
       flight.flightPhase === 'CLIMB' ||
@@ -373,7 +485,6 @@ export class ReliabilityModel {
       flight.altitude > 100
     );
 
-    // Persistence Timer (Requirements 10, 11, 12, 13, 24, 25)
     if (isCriticalHealth && isAirborne) {
       this.criticalPersistenceSeconds = Math.min(
         ReliabilityModel.CRITICAL_PERSISTENCE_MAX_SEC,
@@ -385,7 +496,6 @@ export class ReliabilityModel {
 
     const emergencyRecoveryTriggered = isAirborne && this.criticalPersistenceSeconds >= ReliabilityModel.CRITICAL_PERSISTENCE_MAX_SEC;
 
-    // 10. Emergency Landing Point (ELP) Evaluation State
     let emergencyRecovery: EmergencyRecoveryState | undefined = undefined;
     if (emergencyRecoveryTriggered || flight.flightPhase === 'EMERGENCY_DIVERT' || flight.flightPhase === 'RECOVERY_APPROACH' || flight.flightPhase === 'RECOVERED') {
       emergencyRecovery = ELPManager.evaluateELPs(
@@ -405,7 +515,7 @@ export class ReliabilityModel {
       }
     }
 
-    // 11. Multi-Factor Decision Synthesis Engine
+    // 7. Multi-Gate Decision Synthesis
     let decision: MissionDecision = 'GO';
     let decisionReason = `All engine health parameters nominal (SOH ${engineSOH}%) and mission endurance margin is +${rulMarginHours} h.`;
 
@@ -417,51 +527,32 @@ export class ReliabilityModel {
       decision = 'GO';
       riskLevel = 'LOW';
       decisionReason = `Mission completed successfully. UAV safely landed at destination.`;
-    } else if (!engineOn) {
-      // Pre-mission Standby / Ground unstarted
-      if (enduranceStatus === 'FAIL') {
-        decision = 'NO-GO';
-        riskLevel = 'CRITICAL';
-        decisionReason = `Insufficient engine RUL (${rulHours} h) for planned route (${missionDemandHours} h). Capability margin is negative (${rulMarginHours} h). Engine maintenance required before dispatch.`;
-      } else {
-        decision = 'GO';
-        riskLevel = 'LOW';
-        decisionReason = `Engine in Standby. Planned mission demand is ${missionDemandHours} h (~${estimatedFlightTimeMinutes} min). Ready for startup sequence.`;
-      }
     } else if (emergencyRecoveryTriggered || flight.flightPhase === 'EMERGENCY_DIVERT' || flight.flightPhase === 'RECOVERY_APPROACH') {
-      // In-flight continuous critical persistence >= 30 seconds
       decision = 'EMERGENCY RECOVERY';
       riskLevel = 'CRITICAL';
       const elpTargetName = emergencyRecovery?.selectedELP ? `${emergencyRecovery.selectedELP.id} (${emergencyRecovery.selectedELP.name})` : 'Nearest Reachable ELP';
       decisionReason = `CRITICAL PERSISTENCE (30/30 sec) EXCEEDED: Severe continuous propulsion failure in flight. Original mission ABORTED. Diverting to safest reachable emergency landing point: ${elpTargetName}.`;
     } else if (isAirborne && isCriticalHealth) {
-      // In-flight active critical anomaly before 30s threshold
       decision = 'NO-GO';
       riskLevel = 'CRITICAL';
       decisionReason = `CRITICAL ANOMALY IN FLIGHT: ${healthDetails}. Mission endurance is +${rulMarginHours} h, but active failure overrides prognostic RUL. Persistence: ${Math.floor(this.criticalPersistenceSeconds)}/30 sec before auto-emergency recovery.`;
     } else if (enduranceStatus === 'FAIL') {
-      // Negative endurance margin
       decision = 'NO-GO';
       riskLevel = 'CRITICAL';
       decisionReason = `Insufficient remaining useful life (RUL ${rulHours} h < mission demand ${missionDemandHours} h). Negative capability margin (${rulMarginHours} h).`;
     } else if (!isAirborne && isCriticalHealth) {
-      // Pre-flight / Ground engine running with critical fault
       decision = 'NO-GO';
       riskLevel = 'CRITICAL';
-      if (fault.activeFault !== 'NORMAL') {
-        decisionReason = `Mission endurance is sufficient (+${rulMarginHours} h), but a critical propulsion anomaly (${fault.activeFault.replace(/_/g, ' ')}) is currently active. Pre-flight abort advised.`;
-      } else {
-        decisionReason = `Severe engine degradation detected (SOH ${engineSOH}%). Pre-flight abort advised.`;
-      }
+      decisionReason = hasActiveFault
+        ? `Mission endurance is sufficient (+${rulMarginHours} h), but a critical propulsion anomaly (${fault.activeFault.replace(/_/g, ' ')}) is currently active. Pre-flight abort advised.`
+        : `Severe engine degradation detected (SOH ${engineSOH}%). Pre-flight abort advised.`;
     } else if (riskLevel === 'CRITICAL') {
-      // Excessive operational risk
       decision = 'NO-GO';
       riskLevel = 'CRITICAL';
       decisionReason = `Mission risk (${faultRiskPercent}%) exceeds maximum allowable safety threshold.`;
     } else if (isDegradedHealth || isWarningHealth || enduranceStatus === 'MARGINAL' || riskLevel === 'HIGH' || riskLevel === 'MEDIUM') {
-      // Cautionary operational state with sufficient endurance
       decision = 'CAUTION';
-      if (fault.activeFault !== 'NORMAL' && fault.severity === 'LOW') {
+      if (hasActiveFault && fault.severity === 'LOW') {
         decisionReason = `Low-severity ${fault.activeFault.replace(/_/g, ' ').toLowerCase()} anomaly detected. Predicted endurance is sufficient (+${rulMarginHours} h), but continued monitoring is advised.`;
       } else if (isDegradedHealth) {
         decisionReason = `${healthDetails}. Mission endurance is sufficient (+${rulMarginHours} h), but continued operation requires caution and monitoring.`;
@@ -476,17 +567,85 @@ export class ReliabilityModel {
       decisionReason = `All engine health parameters nominal (SOH ${engineSOH}%) and mission endurance margin is +${rulMarginHours} h.`;
     }
 
-    // 12. Explainable Mission Reliability Score (%)
-    // Formula: Reliability = 0.35*SOH + 0.30*(100-FaultRisk) + 0.20*min(100, RUL*2.5) + 0.15*(1.0-Anomaly)*100
-    let rel = 0.35 * engineSOH + 0.30 * (100 - faultRiskPercent) + 0.20 * Math.min(100, rulHours * 2.5) + 0.15 * (1.0 - anomalyScore) * 100;
-    if (decision === 'NO-GO' || decision === 'EMERGENCY RECOVERY' || emergencyRecoveryTriggered) {
-      rel = Math.min(rel, 30);
-    } else if (decision === 'CAUTION') {
-      rel = Math.min(rel, 68);
-    }
-    const reliabilityScore = Math.round(Math.max(10, Math.min(99, rel)));
+    // =========================================================================
+    // SECTION C: TRANSPARENT COMPOSITE RELIABILITY FORMULA (0–100)
+    // =========================================================================
+    //
+    // Fixed & Documented Component Weights:
+    // reliabilityScore = 0.35 * healthComponent
+    //                  + 0.25 * riskComponent
+    //                  + 0.20 * enduranceComponent
+    //                  + 0.10 * anomalyComponent
+    //                  + 0.10 * faultSeverityComponent
+    //
 
-    return {
+    // 1. Health Component (35% weight)
+    let healthComponent = 95;
+    if (isCriticalHealth) {
+      healthComponent = Math.min(39, Math.max(0, (engineSOH / 100) * 39));
+    } else if (isDegradedHealth) {
+      healthComponent = Math.min(69, Math.max(40, 40 + (engineSOH / 100) * 29));
+    } else if (isWarningHealth) {
+      healthComponent = Math.min(89, Math.max(70, 70 + (engineSOH / 100) * 19));
+    } else {
+      healthComponent = Math.min(100, Math.max(90, engineSOH));
+    }
+
+    // 2. Risk Component (25% weight)
+    const riskComponent = Math.max(0, Math.min(100, 100 - faultRiskPercent));
+
+    // 3. Endurance Component (20% weight) - Note: Endurance does NOT dominate overall score
+    let enduranceComponent = 95;
+    if (rulHours < missionDemandHours) {
+      enduranceComponent = Math.max(0, Math.min(15, (rulHours / Math.max(0.01, missionDemandHours)) * 15));
+    } else if (rulMarginHours < 0.5) {
+      enduranceComponent = 50 + (rulMarginHours / 0.5) * 20; // 50 - 70
+    } else if (rulMarginHours < 2.0) {
+      enduranceComponent = 70 + ((rulMarginHours - 0.5) / 1.5) * 25; // 70 - 95
+    } else {
+      enduranceComponent = Math.min(100, 95 + (rulMarginHours - 2.0) * 0.5); // 95 - 100
+    }
+
+    // 4. Anomaly Component (10% weight)
+    const anomalyComponent = Math.max(0, Math.min(100, 100 * (1.0 - anomalyScore)));
+
+    // 5. Fault Severity Component (10% weight)
+    let faultSeverityComponent = 100;
+    if (hasActiveFault) {
+      if (fault.severity === 'LOW') faultSeverityComponent = 80;
+      else if (fault.severity === 'MEDIUM') faultSeverityComponent = 60;
+      else if (fault.severity === 'HIGH') faultSeverityComponent = 30;
+      else faultSeverityComponent = 0;
+    }
+
+    // Compute Weighted Composite
+    let rawReliability = (
+      0.35 * healthComponent +
+      0.25 * riskComponent +
+      0.20 * enduranceComponent +
+      0.10 * anomalyComponent +
+      0.10 * faultSeverityComponent
+    );
+
+    // Apply safety gate bounding
+    if (decision === 'NO-GO' || decision === 'EMERGENCY RECOVERY' || emergencyRecoveryTriggered) {
+      rawReliability = Math.min(rawReliability, 35);
+    } else if (decision === 'CAUTION') {
+      rawReliability = Math.min(rawReliability, 72);
+    }
+
+    rawReliability = Math.max(1, Math.min(99, rawReliability));
+
+    // Smooth Update Rate Limiting (Prevent wild unphysical jumps)
+    const maxChangePerSec = isCriticalHealth ? 25.0 : isDegradedHealth ? 8.0 : 2.5;
+    const maxDelta = maxChangePerSec * dt;
+    const targetDelta = rawReliability - this.smoothedReliability;
+    const boundedDelta = Math.max(-maxDelta, Math.min(maxDelta, targetDelta));
+
+    this.smoothedReliability += boundedDelta;
+    const reliabilityScore = Math.round(Math.max(1, Math.min(99, this.smoothedReliability)));
+
+    const resultState: MissionReliabilityState = {
       reliabilityScore,
       riskLevel,
       decision,
@@ -509,7 +668,7 @@ export class ReliabilityModel {
       healthCheck: {
         status: healthStatus,
         faultName: fault.activeFault,
-        faultSeverity: fault.severity,
+        faultSeverity: hasActiveFault ? fault.severity : 'NONE',
         details: healthDetails
       },
       riskCheck: {
@@ -529,7 +688,17 @@ export class ReliabilityModel {
       missionTimeFormatted,
       terrainElevationFt: terrainElevFt,
       aglAltitudeFt: aglFt,
-      routeDeviationKm: routeDevKm
+      routeDeviationKm: routeDevKm,
+      isParked: false,
+      isCompleted,
+      missionStatus: isCompleted ? 'COMPLETED' : 'IN_PROGRESS'
     };
+
+    if (isCompleted && !this.isFrozenOnCompletion) {
+      this.isFrozenOnCompletion = true;
+      this.frozenState = { ...resultState };
+    }
+
+    return resultState;
   }
 }

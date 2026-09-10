@@ -5,20 +5,14 @@ import {
   AlertOctagon,
   Activity,
   Cpu,
-  Clock,
-  Gauge,
   CheckCircle2,
-  XCircle,
-  AlertCircle,
   Timer,
   Zap,
-  Check,
-  Navigation,
-  MapPin,
-  Compass
+  HelpCircle,
+  Play
 } from 'lucide-react';
 import { FaultState, FlightPhase, FlightState, MissionReliabilityState, SensorSuiteState } from '../types/simulation';
-import { LocationCoord, Waypoint, ELPCandidate } from '../types/mission';
+import { LocationCoord, Waypoint } from '../types/mission';
 
 interface MissionReliabilityCardProps {
   reliability?: MissionReliabilityState;
@@ -34,23 +28,25 @@ interface MissionReliabilityCardProps {
 
 export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
   reliability,
-  flight,
-  sensors,
-  fault,
   flightPhase,
   engineOn,
-  source,
-  destination,
-  activeWaypoints
 }) => {
-  const relScore = reliability?.reliabilityScore ?? (engineOn ? 98 : 99);
-  const decision = reliability?.decision ?? 'GO';
-  const riskLevel = reliability?.riskLevel ?? 'LOW';
-  const decisionReason = reliability?.decisionReason || 'All engine health parameters nominal and mission endurance margin is adequate.';
+  // Parked & Completion State Determinations
+  const isParked = reliability?.isParked ?? (!engineOn || flightPhase === 'PARKED' || flightPhase === 'STANDBY');
+  const isRecovered = flightPhase === 'RECOVERED';
+  const isCompleted = (flightPhase === 'COMPLETED' || reliability?.isCompleted) && !isRecovered;
+
+  const decision = reliability?.decision ?? (isParked ? 'GO' : 'GO');
+  const riskLevel = reliability?.riskLevel ?? (isParked ? 'LOW' : 'LOW');
+  const decisionReason = reliability?.decisionReason || (isParked 
+    ? 'Engine in standby. Reliability assessment will activate when the mission starts.'
+    : 'All engine health parameters nominal and mission endurance margin is adequate.');
+  
+  const relScore = reliability?.reliabilityScore ?? 99;
   const engineSOH = reliability?.engineSOH ?? 99;
   const rulHours = reliability?.rulHours ?? 240.0;
-  const faultRisk = reliability?.faultRiskPercent ?? 3;
-  const anomalyScore = reliability?.anomalyScore ?? 0.04;
+  const faultRisk = reliability?.faultRiskPercent ?? 0;
+  const anomalyScore = reliability?.anomalyScore ?? 0.00;
   
   // Authoritative mission parameters from central simulation state (ONE truth)
   const totalMissionDistKm = reliability?.totalMissionDistanceKm ?? 32.1;
@@ -59,31 +55,44 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
   const rulMarginHours = reliability?.rulMarginHours ?? Number((rulHours - missionDemandHours).toFixed(2));
   
   const enduranceCheck = reliability?.enduranceCheck ?? {
-    status: rulHours >= missionDemandHours ? 'PASS' : 'FAIL',
+    status: isParked ? 'PASS' : rulHours >= missionDemandHours ? 'PASS' : 'FAIL',
     requiredHours: missionDemandHours,
     rulHours: rulHours,
     marginHours: rulMarginHours,
-    details: `Margin +${rulMarginHours} h`
+    details: isParked ? 'READY' : `Margin +${rulMarginHours} h`
   };
 
   const healthCheck = reliability?.healthCheck ?? {
-    status: fault?.activeFault === 'NORMAL' || !fault ? 'PASS' : 'CRITICAL',
-    faultName: fault?.activeFault || 'NORMAL',
-    faultSeverity: fault?.severity || 'NONE',
-    details: 'All engine parameters nominal'
+    status: 'NORMAL',
+    faultName: 'NORMAL',
+    faultSeverity: 'NONE',
+    details: isParked ? 'BASELINE' : 'All engine parameters nominal'
   };
 
   const riskCheck = reliability?.riskCheck ?? {
-    status: faultRisk > 60 ? 'FAIL' : faultRisk > 30 ? 'ELEVATED' : 'PASS',
-    riskScorePercent: faultRisk,
-    details: `Operational risk ${faultRisk}%`
+    status: 'PASS',
+    riskScorePercent: isParked ? 0 : faultRisk,
+    details: isParked ? 'NOT ACTIVE' : `Operational risk ${faultRisk}%`
   };
 
   const criticalPersistenceSec = reliability?.criticalPersistenceSeconds ?? 0;
   const isCriticalPersistenceActive = criticalPersistenceSec > 0 && criticalPersistenceSec < 30;
   const emergencyRecovery = reliability?.emergencyRecovery;
-  const isEmergencyRecovery = decision === 'EMERGENCY RECOVERY' || reliability?.emergencyRecoveryTriggered || flightPhase === 'EMERGENCY_DIVERT' || flightPhase === 'RECOVERY_APPROACH' || flightPhase === 'RECOVERED';
-  const isRecovered = flightPhase === 'RECOVERED';
+  const isEmergencyRecovery = decision === 'EMERGENCY RECOVERY' || reliability?.emergencyRecoveryTriggered || flightPhase === 'EMERGENCY_DIVERT' || flightPhase === 'RECOVERY_APPROACH';
+
+  // Format decision text for prominent banner
+  let decisionDisplayText = 'READY';
+  if (isRecovered) {
+    decisionDisplayText = 'MISSION RECOVERED';
+  } else if (isCompleted) {
+    decisionDisplayText = 'MISSION COMPLETED';
+  } else if (isEmergencyRecovery) {
+    decisionDisplayText = 'EMERGENCY RECOVERY';
+  } else if (isParked) {
+    decisionDisplayText = 'READY';
+  } else {
+    decisionDisplayText = decision;
+  }
 
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-4 shadow-sm flex flex-col justify-between space-y-3.5">
@@ -110,12 +119,16 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
           </span>
         </div>
 
-        {/* 2. Prominent MISSION DECISION Banner (GO / CAUTION / NO-GO / EMERGENCY RECOVERY) */}
+        {/* 2. Prominent MISSION DECISION Banner */}
         <div className={`rounded-xl p-3.5 text-white shadow-sm flex items-center justify-between transition-all ${
           isRecovered
             ? 'bg-gradient-to-r from-emerald-600 via-teal-700 to-emerald-800 border border-emerald-400'
+            : isCompleted
+            ? 'bg-gradient-to-r from-emerald-700 to-teal-800 border border-emerald-500'
             : isEmergencyRecovery
             ? 'bg-gradient-to-r from-red-700 via-rose-800 to-red-900 border border-red-500 animate-pulse'
+            : isParked
+            ? 'bg-gradient-to-r from-slate-700 to-slate-800 border border-slate-600'
             : decision === 'GO'
             ? 'bg-gradient-to-r from-emerald-600 to-emerald-700'
             : decision === 'CAUTION'
@@ -127,23 +140,30 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
               MISSION DECISION
             </div>
             <div className="text-xl font-black tracking-tight flex items-center gap-2 mt-0.5">
-              {decision === 'GO' && !isRecovered && <ShieldCheck className="w-5 h-5 text-emerald-100" />}
-              {decision === 'CAUTION' && <AlertTriangle className="w-5 h-5 text-slate-950" />}
-              {decision === 'NO-GO' && <AlertOctagon className="w-5 h-5 animate-pulse" />}
+              {isParked && <Play className="w-5 h-5 text-amber-300" />}
+              {!isParked && decision === 'GO' && !isRecovered && !isCompleted && <ShieldCheck className="w-5 h-5 text-emerald-100" />}
+              {!isParked && decision === 'CAUTION' && <AlertTriangle className="w-5 h-5 text-slate-950" />}
+              {!isParked && decision === 'NO-GO' && !isEmergencyRecovery && <AlertOctagon className="w-5 h-5 animate-pulse" />}
               {isEmergencyRecovery && !isRecovered && <Zap className="w-5 h-5 text-yellow-300 animate-bounce" />}
-              {isRecovered && <CheckCircle2 className="w-5 h-5 text-emerald-200" />}
-              <span>{isRecovered ? 'MISSION RECOVERED' : isEmergencyRecovery ? 'EMERGENCY RECOVERY' : decision}</span>
+              {(isRecovered || isCompleted) && <CheckCircle2 className="w-5 h-5 text-emerald-200" />}
+              <span>{decisionDisplayText}</span>
             </div>
           </div>
 
           <div className="text-right">
-            <div className="text-[10px] font-bold uppercase tracking-wider opacity-90">
-              RELIABILITY
+            <div className="text-[10px] font-bold uppercase tracking-wider opacity-90 flex items-center justify-end gap-1" title="Composite mission reliability derived from current engine health, fault risk, anomaly level and mission endurance.">
+              <span>RELIABILITY</span>
+              <HelpCircle className="w-2.5 h-2.5 opacity-75" />
             </div>
             <div className="text-xl font-black font-mono mt-0.5">
-              {relScore}%
+              {isParked ? 'READY' : `${relScore}%`}
             </div>
           </div>
+        </div>
+
+        {/* Reliability Explanatory Subtext */}
+        <div className="text-[9px] text-[#64748B] italic text-right -mt-1 px-1">
+          Composite mission reliability derived from current engine health, fault risk, anomaly level and mission endurance.
         </div>
 
         {/* In-Flight Critical Persistence Countdown Banner */}
@@ -243,7 +263,7 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
         </div>
       )}
 
-      {/* 5. Multi-Factor Separate Check Cards */}
+      {/* 5. Multi-Factor Separate Safety & Readiness Checks */}
       <div className="space-y-1.5">
         <div className="text-[10.5px] font-bold text-[#4B5563] uppercase tracking-wider flex items-center justify-between">
           <span>MISSION SAFETY & READINESS CHECKS</span>
@@ -254,7 +274,9 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
           
           {/* CHECK A: ENDURANCE CHECK */}
           <div className={`rounded-xl p-2.5 border space-y-1 flex flex-col justify-between ${
-            enduranceCheck.status === 'PASS'
+            isParked
+              ? 'bg-slate-50 border-slate-200'
+              : enduranceCheck.status === 'PASS'
               ? 'bg-emerald-50/50 border-emerald-200'
               : enduranceCheck.status === 'MARGINAL'
               ? 'bg-amber-50/50 border-amber-200'
@@ -263,13 +285,15 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-extrabold uppercase text-slate-700">ENDURANCE</span>
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${
-                enduranceCheck.status === 'PASS'
+                isParked
+                  ? 'bg-slate-100 text-slate-700 border-slate-300'
+                  : enduranceCheck.status === 'PASS'
                   ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                   : enduranceCheck.status === 'MARGINAL'
                   ? 'bg-amber-100 text-amber-800 border-amber-300'
                   : 'bg-red-100 text-red-800 border-red-300'
               }`}>
-                {enduranceCheck.status}
+                {isParked ? 'READY' : enduranceCheck.status}
               </span>
             </div>
             <div className="space-y-0.5 text-[10px] text-slate-600 font-mono">
@@ -279,12 +303,12 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
               </div>
               <div className="flex justify-between">
                 <span>RUL:</span>
-                <span className="font-bold text-cyan-700">{rulHours} h</span>
+                <span className="font-bold text-cyan-700">{isParked ? 'READY' : `${rulHours} h`}</span>
               </div>
               <div className="flex justify-between pt-0.5 border-t border-slate-200/80">
                 <span>Margin:</span>
-                <span className={`font-black ${rulMarginHours >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  {rulMarginHours >= 0 ? `+${rulMarginHours}` : rulMarginHours} h
+                <span className={`font-black ${isParked ? 'text-slate-700' : rulMarginHours >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                  {isParked ? `+${rulMarginHours} h` : rulMarginHours >= 0 ? `+${rulMarginHours} h` : `${rulMarginHours} h`}
                 </span>
               </div>
             </div>
@@ -292,7 +316,9 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
 
           {/* CHECK B: CURRENT HEALTH CHECK */}
           <div className={`rounded-xl p-2.5 border space-y-1 flex flex-col justify-between ${
-            healthCheck.status === 'PASS' || healthCheck.status === 'NORMAL'
+            isParked
+              ? 'bg-slate-50 border-slate-200'
+              : healthCheck.status === 'PASS' || healthCheck.status === 'NORMAL'
               ? 'bg-emerald-50/50 border-emerald-200'
               : healthCheck.status === 'WARNING'
               ? 'bg-yellow-50/60 border-yellow-300'
@@ -303,7 +329,9 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-extrabold uppercase text-slate-700">HEALTH</span>
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${
-                healthCheck.status === 'PASS' || healthCheck.status === 'NORMAL'
+                isParked
+                  ? 'bg-slate-100 text-slate-700 border-slate-300'
+                  : healthCheck.status === 'PASS' || healthCheck.status === 'NORMAL'
                   ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                   : healthCheck.status === 'WARNING'
                   ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
@@ -311,7 +339,7 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
                   ? 'bg-amber-100 text-amber-800 border-amber-300'
                   : 'bg-red-100 text-red-800 border-red-300'
               }`}>
-                {healthCheck.status}
+                {isParked ? 'BASELINE' : healthCheck.status}
               </span>
             </div>
             <div className="space-y-0.5 text-[10px] text-slate-600 font-mono">
@@ -321,12 +349,12 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
               </div>
               <div className="truncate text-[9.5px]" title={healthCheck.faultName}>
                 <span>Fault: </span>
-                <span className="font-bold text-slate-900">{healthCheck.faultName.replace(/_/g, ' ')}</span>
+                <span className="font-bold text-slate-900">{isParked ? 'NORMAL' : healthCheck.faultName.replace(/_/g, ' ')}</span>
               </div>
               <div className="flex justify-between pt-0.5 border-t border-slate-200/80 text-[9.5px]">
                 <span>Severity:</span>
                 <span className={`font-bold ${healthCheck.faultSeverity === 'HIGH' || healthCheck.faultSeverity === 'CRITICAL' ? 'text-red-600' : 'text-slate-700'}`}>
-                  {healthCheck.faultSeverity}
+                  {isParked ? 'NONE' : healthCheck.faultSeverity}
                 </span>
               </div>
             </div>
@@ -334,7 +362,9 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
 
           {/* CHECK C: RISK CHECK */}
           <div className={`rounded-xl p-2.5 border space-y-1 flex flex-col justify-between ${
-            riskCheck.status === 'PASS'
+            isParked
+              ? 'bg-slate-50 border-slate-200'
+              : riskCheck.status === 'PASS'
               ? 'bg-emerald-50/50 border-emerald-200'
               : riskCheck.status === 'ELEVATED'
               ? 'bg-amber-50/50 border-amber-200'
@@ -343,28 +373,30 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-extrabold uppercase text-slate-700">MISSION RISK</span>
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${
-                riskCheck.status === 'PASS'
+                isParked
+                  ? 'bg-slate-100 text-slate-700 border-slate-300'
+                  : riskCheck.status === 'PASS'
                   ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                   : riskCheck.status === 'ELEVATED'
                   ? 'bg-amber-100 text-amber-800 border-amber-300'
                   : 'bg-red-100 text-red-800 border-red-300'
               }`}>
-                {riskCheck.status}
+                {isParked ? 'NOT ACTIVE' : riskCheck.status}
               </span>
             </div>
             <div className="space-y-0.5 text-[10px] text-slate-600 font-mono">
               <div className="flex justify-between">
                 <span>Fault Risk:</span>
-                <span className={`font-bold ${faultRisk > 30 ? 'text-amber-600' : 'text-slate-900'}`}>{faultRisk}%</span>
+                <span className={`font-bold ${faultRisk > 30 ? 'text-amber-600' : 'text-slate-900'}`}>{isParked ? '0%' : `${faultRisk}%`}</span>
               </div>
               <div className="flex justify-between">
                 <span>Anomaly:</span>
-                <span className="font-bold text-purple-700">{anomalyScore}</span>
+                <span className="font-bold text-purple-700">{isParked ? '0.00' : anomalyScore.toFixed(2)}</span>
               </div>
               <div className="flex justify-between pt-0.5 border-t border-slate-200/80">
                 <span>Level:</span>
-                <span className={`font-black ${riskLevel === 'CRITICAL' ? 'text-red-700' : riskLevel === 'HIGH' ? 'text-amber-700' : 'text-emerald-700'}`}>
-                  {riskLevel}
+                <span className={`font-black ${isParked ? 'text-slate-600' : riskLevel === 'CRITICAL' ? 'text-red-700' : riskLevel === 'HIGH' ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {isParked ? 'NOT ACTIVE' : riskLevel}
                 </span>
               </div>
             </div>
@@ -390,8 +422,8 @@ export const MissionReliabilityCard: React.FC<MissionReliabilityCardProps> = ({
           </div>
           <div className="bg-slate-800/80 p-1.5 rounded-lg">
             <div className="text-slate-400 text-[9px] uppercase">ENGINE RUL</div>
-            <div className="text-sm font-black text-cyan-300">{rulHours} h</div>
-            <div className="text-[8.5px] text-slate-400">Prognostic Life</div>
+            <div className="text-sm font-black text-cyan-300">{isParked ? 'READY' : `${rulHours} h`}</div>
+            <div className="text-[8.5px] text-slate-400">{isParked ? 'Baseline: 240h' : 'Prognostic Life'}</div>
           </div>
           <div className="bg-slate-800/80 p-1.5 rounded-lg">
             <div className="text-slate-400 text-[9px] uppercase">RUL MARGIN</div>

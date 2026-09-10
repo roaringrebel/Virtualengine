@@ -203,7 +203,7 @@ export class FlightDynamicsModel {
 
       this.latitude = destTarget.lat;
       this.longitude = destTarget.lon;
-      this.altitude = destTarget.alt || destTarget.altitudeFt || 0;
+      this.altitude = ('alt' in destTarget ? destTarget.alt : 'altitudeFt' in destTarget ? destTarget.altitudeFt : 0) || 0;
       this.airspeed = 0;
       this.groundSpeed = 0;
       this.verticalSpeed = 0;

@@ -124,11 +124,11 @@ export class VibrationEngine {
       let az = 0;
 
       if (!engineOn || rpm <= 20) {
-        // Engine OFF / Standby: Ambient sensor noise floor
-        const noiseFloor = 0.0008; // ~0.0008 g noise floor
-        ax = (Math.random() - 0.5) * noiseFloor;
-        ay = (Math.random() - 0.5) * noiseFloor;
-        az = (Math.random() - 0.5) * noiseFloor;
+        // Engine OFF / Standby: Deterministic ambient sensor noise floor (< 0.0008 g)
+        const noiseFloor = 0.0008;
+        ax = Math.sin(t * 1234.56 + s * 17.1) * noiseFloor * 0.5;
+        ay = Math.cos(t * 2345.67 + s * 23.3) * noiseFloor * 0.5;
+        az = Math.sin(t * 3456.78 + s * 29.5) * noiseFloor * 0.5;
       } else {
         // 1. Fundamental Rotational Frequency f_rot = RPM / 60 (Hz)
         const f1 = rpm / 60.0;
@@ -163,21 +163,21 @@ export class VibrationEngine {
         let faultY = 0;
         let faultZ = 0;
 
-        const sevMult = fault.severity === 'HIGH' ? 1.4 : fault.severity === 'LOW' ? 0.6 : 1.0;
+        const sevMult = fault.severity === 'CRITICAL' ? 1.6 : fault.severity === 'HIGH' ? 1.25 : fault.severity === 'LOW' ? 0.40 : 0.70;
         const faultRamp = Math.min(1.0, fault.elapsedSeconds / 2.5);
 
         switch (fault.activeFault) {
           case 'EXCESSIVE_VIBRATION': {
-            // Calibrated from EXCESSIVE_VIBRATION dataset: RMS ~0.090g, max axis X ~0.208g
-            // Severe unbalance / structural resonance on X axis
-            const unbalanceAmp = 0.075 * sevMult * faultRamp * rpmFactor;
+            // Calibrated: LOW ~0.050g, MEDIUM ~0.080g, HIGH ~0.135g RMS
+            // Structural resonance / unbalance
+            const unbalanceAmp = 0.055 * sevMult * faultRamp * rpmFactor;
             faultX = unbalanceAmp * (
-              Math.sin(2 * Math.PI * f1 * t) * 1.8 +
-              Math.sin(2 * Math.PI * f2 * t) * 0.6 +
-              (Math.random() - 0.5) * 0.4
+              Math.sin(2 * Math.PI * f1 * t) * 1.5 +
+              Math.sin(2 * Math.PI * f2 * t) * 0.45 +
+              Math.sin(2 * Math.PI * (f1 * 4.2) * t) * 0.25
             );
-            faultY = unbalanceAmp * 0.45 * Math.cos(2 * Math.PI * f1 * t);
-            faultZ = unbalanceAmp * 0.70 * Math.sin(2 * Math.PI * (f1 * 1.5) * t);
+            faultY = unbalanceAmp * 0.35 * Math.cos(2 * Math.PI * f1 * t);
+            faultZ = unbalanceAmp * 0.50 * Math.sin(2 * Math.PI * (f1 * 1.5) * t);
             break;
           }
 
@@ -209,11 +209,11 @@ export class VibrationEngine {
 
           case 'LOW_OIL_PRESSURE':
           case 'OVERHEATING': {
-            // Increased friction baseline chatter
+            // Increased friction baseline chatter (deterministic pseudo-harmonics)
             const frictionAmp = 0.012 * sevMult * faultRamp;
-            faultX = (Math.random() - 0.5) * frictionAmp * 1.5;
-            faultY = (Math.random() - 0.5) * frictionAmp;
-            faultZ = (Math.random() - 0.5) * frictionAmp;
+            faultX = Math.sin(t * 891.2 + s * 13.7) * frictionAmp * 0.75;
+            faultY = Math.cos(t * 1123.4 + s * 19.1) * frictionAmp * 0.50;
+            faultZ = Math.sin(t * 1456.8 + s * 23.3) * frictionAmp * 0.50;
             break;
           }
 
@@ -222,11 +222,11 @@ export class VibrationEngine {
             break;
         }
 
-        // 4. Bounded Real Sensor Electronic Noise (calibrated Gaussian-like noise)
+        // 4. Bounded Real Sensor Electronic Noise (calibrated deterministic harmonic noise)
         const sensorNoiseAmp = 0.0035;
-        const nx = (Math.random() - 0.5) * sensorNoiseAmp;
-        const ny = (Math.random() - 0.5) * sensorNoiseAmp;
-        const nz = (Math.random() - 0.5) * sensorNoiseAmp;
+        const nx = Math.sin(t * 2789.1 + s * 31.4) * sensorNoiseAmp * 0.5;
+        const ny = Math.cos(t * 3141.5 + s * 37.2) * sensorNoiseAmp * 0.5;
+        const nz = Math.sin(t * 3820.7 + s * 41.9) * sensorNoiseAmp * 0.5;
 
         ax = xHarmonic + faultX + nx;
         ay = yHarmonic + faultY + ny;

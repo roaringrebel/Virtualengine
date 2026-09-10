@@ -245,6 +245,7 @@ export interface MissionReliabilityState {
   aglAltitudeFt: number;            // ft AGL (Altitude - Terrain)
   routeDeviationKm: number;         // cross-track deviation (km)
   isCompleted?: boolean;
+  isParked?: boolean;
   missionStatus?: 'STANDBY' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
   emergencyRecovery?: EmergencyRecoveryState;
 }

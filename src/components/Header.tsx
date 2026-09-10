@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Pause, RotateCcw, Activity, Power } from 'lucide-react';
+import { Play, Pause, RotateCcw, Activity, Power, Film } from 'lucide-react';
 import { TelemetryClientStatus } from '../types/telemetry';
 
 interface HeaderProps {
@@ -11,6 +11,7 @@ interface HeaderProps {
   onTogglePause: () => void;
   onChangeSpeed: (speed: number) => void;
   onResetMission: () => void;
+  onShowIntro?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -21,7 +22,8 @@ export const Header: React.FC<HeaderProps> = ({
   speedMultiplier,
   onTogglePause,
   onChangeSpeed,
-  onResetMission
+  onResetMission,
+  onShowIntro
 }) => {
   const [timeStr, setTimeStr] = useState('10:42:18');
   const [dateStr, setDateStr] = useState('Mon, 18 Jul 2025');
@@ -48,24 +50,30 @@ export const Header: React.FC<HeaderProps> = ({
       
       {/* Main Header Bar */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        {/* Brand & Clean Engineering Title (Requirements 2, 41) */}
+        {/* Brand & Clean Engineering Title (Official DRDO Digital Twin) */}
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-gradient-to-br from-[#F97316] to-[#EA580C] rounded-lg flex items-center justify-center text-white font-black text-lg shadow-xs transform -rotate-3">
-            <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current" stroke="currentColor" strokeWidth="1.5">
-              <path d="M12 2L2 22h20L12 2zm0 4l6.5 13h-13L12 6z" />
-            </svg>
-          </div>
+          <img 
+            src="/drdo_logo.png" 
+            alt="DRDO Official Seal" 
+            className="w-10 h-10 object-contain shrink-0 drop-shadow-xs" 
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = '/app_logo.png';
+            }}
+          />
 
           <div>
             <div className="flex items-baseline gap-2">
-              <h1 className="text-[15px] font-black tracking-wide text-[#1F2937]">
+              <h1 className="text-[16px] font-black tracking-wide text-[#1F2937]">
                 BHARAT <span className="text-[#F97316]">AEROTWIN</span>
               </h1>
+              <span className="text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 border border-orange-200">
+                DRDO DIGITAL TWIN
+              </span>
             </div>
             <div className="text-[9.5px] font-bold text-slate-700 tracking-tight flex items-center gap-1.5">
-              <span className="text-[#F97316]">SIMULATED TELEMETRY — PHYSICS-BASED FLIGHT & ENGINE MODEL</span>
+              <span className="text-[#F97316]">DEFENCE R&D ORGANISATION</span>
               <span className="text-gray-300">|</span>
-              <span className="text-slate-500 font-medium">Reduced-Order Rotax 912 ULS Simulation</span>
+              <span className="text-slate-500 font-medium">Rotax 912 ULS Telemetry &amp; Reliability Platform</span>
             </div>
           </div>
         </div>
@@ -141,6 +149,18 @@ export const Header: React.FC<HeaderProps> = ({
               <RotateCcw className="w-2.5 h-2.5 text-[#F97316]" />
               <span>RESET</span>
             </button>
+
+            {/* Intro Video Tour */}
+            {onShowIntro && (
+              <button
+                onClick={onShowIntro}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-50 hover:bg-orange-100 text-[#F97316] border border-orange-200 transition-all cursor-pointer"
+                title="Watch Virtual Engine Video Tour"
+              >
+                <Film className="w-2.5 h-2.5 text-[#F97316]" />
+                <span>INTRO</span>
+              </button>
+            )}
           </div>
 
           {/* Clock */}

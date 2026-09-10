@@ -105,7 +105,7 @@ export const FAULT_DEFINITIONS: Record<FaultType, { name: string; description: s
 export function createInitialFaultState(): FaultState {
   return {
     activeFault: 'NORMAL',
-    severity: 'MEDIUM',
+    severity: 'LOW',
     elapsedSeconds: 0,
     description: FAULT_DEFINITIONS.NORMAL.description,
     propagationPath: FAULT_DEFINITIONS.NORMAL.propagation
