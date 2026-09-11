@@ -1,7 +1,7 @@
 import { TelemetryClientStatus, TelemetryPacket } from '../types/telemetry';
 
 export class TelemetryClient {
-  public endpoint: string = 'https://sihaimodel.vercel.app/api/telemetry';
+  public endpoint: string = 'https://sihaimodel-beta.vercel.app/api/telemetry';
   public isStreaming: boolean = true;
   public status: TelemetryClientStatus['status'] = 'LOCAL_SIMULATION_MODE';
   public packetsSent: number = 0;
@@ -22,7 +22,7 @@ export class TelemetryClient {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('virtualengine_telemetry_endpoint');
       if (saved) {
-        this.endpoint = saved;
+        this.endpoint = this.normalizeEndpoint(saved);
       } else if (endpoint) {
         this.endpoint = this.normalizeEndpoint(endpoint);
       }
@@ -33,7 +33,7 @@ export class TelemetryClient {
 
   public normalizeEndpoint(input: string): string {
     let clean = input.trim();
-    if (!clean) return 'http://localhost:4000/api/telemetry';
+    if (!clean) return 'https://sihaimodel-beta.vercel.app/api/telemetry';
 
     // If input is purely a port number like "3000" or "5000"
     if (/^\d{2,5}$/.test(clean)) {
@@ -50,7 +50,11 @@ export class TelemetryClient {
       return clean.includes('/api/telemetry') ? `http://${clean}` : `http://${clean}/api/telemetry`;
     }
     if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-      clean = `http://${clean}`;
+      clean = `https://${clean}`;
+    }
+    // Guarantee endpoint path ends with /api/telemetry
+    if (!clean.includes('/api/telemetry')) {
+      clean = clean.replace(/\/+$/, '') + '/api/telemetry';
     }
     return clean;
   }

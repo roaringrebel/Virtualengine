@@ -18,6 +18,7 @@ export interface TelemetryPacket {
   oil_temperature: number; // Oil Temp (°C)
   oil_temp?: number; // Alias for backward compatibility
   vibration: number; // Vibration RMS (g)
+  vibration_rms?: number; // Canonical vibration RMS in g
   vibration_rms_g?: number; // Standardized vibration in g
   vibration_peak_g?: number; // Peak vibration (g)
   vibration_p2p_g?: number; // Peak-to-Peak (g)

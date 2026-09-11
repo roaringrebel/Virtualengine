@@ -523,9 +523,11 @@ export class SimulationEngine {
     const vibMetrics = this.state.engine.vibrationMetrics;
 
     const isAnomaly = this.state.fault.activeFault !== 'NORMAL' ||
-      this.state.engine.vibration > 0.060 ||
-      this.state.thermal.cht > 120 ||
-      this.state.thermal.oilPressure < 2.0;
+      (this.state.engineOn && (
+        this.state.engine.vibration > 0.060 ||
+        this.state.thermal.cht > 120 ||
+        (this.state.thermal.oilPressure < 2.0 && this.state.sensors.rpm.value > 1400)
+      ));
 
     return {
       timestamp: new Date().toISOString(),
@@ -538,7 +540,7 @@ export class SimulationEngine {
       flight_phase: this.state.isCompleted ? 'COMPLETED' : this.state.flightPhase,
       engine_on: this.state.engineOn,
 
-      // Rotax 912 Sensors
+      // Rotax 912 Sensors (Canonical 10 Engine Parameters)
       rpm: this.state.sensors.rpm.value,
       cht: Number(this.state.thermal.cht.toFixed(2)),
       egt: Number(this.state.thermal.egt.toFixed(1)),
@@ -546,6 +548,7 @@ export class SimulationEngine {
       oil_temperature: Number(this.state.thermal.oilTemperature.toFixed(2)),
       oil_temp: Number(this.state.thermal.oilTemperature.toFixed(2)),
       vibration: Number(this.state.engine.vibration.toFixed(4)),
+      vibration_rms: Number(this.state.engine.vibration.toFixed(4)),
       vibration_rms_g: Number(this.state.engine.vibration.toFixed(4)),
       vibration_peak_g: Number((vibMetrics?.peakG || 0).toFixed(4)),
       vibration_p2p_g: Number((vibMetrics?.peakToPeakG || 0).toFixed(4)),

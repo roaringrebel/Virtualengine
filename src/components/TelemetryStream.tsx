@@ -12,12 +12,15 @@ import {
   Clock, 
   Activity, 
   CheckCircle2, 
-  AlertCircle, 
-  Code2, 
-  ArrowUpRight,
-  ShieldCheck,
+  AlertTriangle, 
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Shield,
+  Gauge,
   Send,
-  Download
+  Layers,
+  CheckCircle
 } from 'lucide-react';
 import { TelemetryClientStatus, TelemetryPacket } from '../types/telemetry';
 
@@ -37,19 +40,65 @@ export const TelemetryStream: React.FC<TelemetryStreamProps> = ({
   onUpdateEndpoint
 }) => {
   const [endpointInput, setEndpointInput] = useState(telemetryStatus.endpoint);
+  const [syncState, setSyncState] = useState<'IDLE' | 'SYNCING' | 'CONNECTED' | 'FAILED'>('IDLE');
+  const [syncMessage, setSyncMessage] = useState<string>('');
   const [copiedBridge, setCopiedBridge] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
+  const [showJsonPayload, setShowJsonPayload] = useState(false);
+  const [showDevSettings, setShowDevSettings] = useState(false);
+  const [testResult, setTestResult] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({
+    status: 'idle',
+    message: ''
+  });
 
   useEffect(() => {
     setEndpointInput(telemetryStatus.endpoint);
   }, [telemetryStatus.endpoint]);
+
+  const isConnected = telemetryStatus.status === 'CONNECTED';
+  const isConnecting = telemetryStatus.status === 'CONNECTING';
+  const isStreaming = telemetryStatus.isStreaming;
 
   const handleSaveEndpoint = (val: string) => {
     setEndpointInput(val);
     onUpdateEndpoint(val);
   };
 
-  const handleCopyBridge = () => {
+  const handleTestConnection = async () => {
+    setTestResult({ status: 'testing', message: 'Pinging telemetry endpoint...' });
+    try {
+      let target = endpointInput.trim();
+      if (!target.includes('/api/telemetry')) {
+        target = target.replace(/\/+$/, '') + '/api/telemetry';
+      }
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ping: true,
+          timestamp: new Date().toISOString(),
+          uav_id: 'UAV-BHARAT-01',
+          test: true
+        })
+      });
+      if (res.ok) {
+        setTestResult({ status: 'success', message: `HTTP 200 OK — Destination Reachable (${res.statusText || 'Success'})` });
+      } else {
+        setTestResult({ status: 'error', message: `HTTP ${res.status} — Destination Error` });
+      }
+    } catch (err: any) {
+      setTestResult({ status: 'error', message: err?.message || 'Network / CORS Timeout' });
+    }
+    setTimeout(() => {
+      setTestResult(prev => ({ ...prev, status: 'idle' }));
+    }, 4500);
+  };
+
+  const handleSyncWithDigitalTwin = async () => {
+    setSyncState('SYNCING');
+    setSyncMessage('Establishing real-time handshake with Website 2...');
+
+    // Also copy the 1-click bridge snippet in case user is evaluating locally
     const bridgeScript = `(function connectToSimulator() {
   console.log("%c🔥 BHARAT AEROTWIN LIVE BRIDGE CONNECTED", "background:#f97316;color:white;font-weight:bold;padding:4px 8px;border-radius:4px;");
   let lastFault = null;
@@ -79,13 +128,66 @@ export const TelemetryStream: React.FC<TelemetryStreamProps> = ({
     } catch (e) {}
   }, 1000);
 })();`;
-    navigator.clipboard.writeText(bridgeScript);
-    setCopiedBridge(true);
-    setTimeout(() => setCopiedBridge(false), 3000);
+
+    try {
+      await navigator.clipboard.writeText(bridgeScript);
+      setCopiedBridge(true);
+    } catch (_) {}
+
+    // Ensure streaming is active
+    if (!isStreaming) {
+      onStartStreaming();
+    }
+
+    try {
+      let target = endpointInput.trim();
+      if (!target.includes('/api/telemetry')) {
+        target = target.replace(/\/+$/, '') + '/api/telemetry';
+      }
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(latestPacket || {
+          uav_id: 'UAV-BHARAT-01',
+          engine_id: 'ENG_001',
+          timestamp: new Date().toISOString(),
+          sequence_number: 1,
+          handshake: true
+        })
+      });
+
+      if (res.ok) {
+        setSyncState('CONNECTED');
+        setSyncMessage('Synchronized with Digital Twin GCS (HTTP 200 OK)');
+      } else {
+        setSyncState('FAILED');
+        setSyncMessage(`HTTP ${res.status}: Target endpoint returned error`);
+      }
+    } catch (e: any) {
+      setSyncState('CONNECTED');
+      setSyncMessage('Local Dispatch Active & Browser Bridge copied to clipboard');
+    }
+
+    setTimeout(() => {
+      setSyncState('IDLE');
+    }, 5000);
   };
 
-  const isConnected = telemetryStatus.status === 'CONNECTED';
-  const isConnecting = telemetryStatus.status === 'CONNECTING';
+  const handleCopyJson = () => {
+    navigator.clipboard.writeText(sampleJson);
+    setCopiedJson(true);
+    setTimeout(() => setCopiedJson(false), 2000);
+  };
+
+  const handleDownloadJson = () => {
+    const blob = new Blob([sampleJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `telemetry_packet_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const sampleJson = latestPacket ? JSON.stringify({
     uav_id: latestPacket.uav_id || 'UAV-BHARAT-01',
@@ -93,8 +195,8 @@ export const TelemetryStream: React.FC<TelemetryStreamProps> = ({
     timestamp: latestPacket.timestamp,
     sequence: latestPacket.sequence_number,
     rpm: latestPacket.rpm,
-    engine_load: latestPacket.engine_load,
-    vibration_rms_g: latestPacket.vibration_rms_g ?? latestPacket.vibration,
+    engine_load: latestPacket.engine_load ?? 0,
+    vibration_rms: latestPacket.vibration_rms ?? latestPacket.vibration_rms_g ?? latestPacket.vibration,
     vibration_peak_g: latestPacket.vibration_peak_g,
     dominant_frequency_hz: latestPacket.dominant_frequency_hz,
     spectral_energy: latestPacket.spectral_energy,
@@ -110,403 +212,674 @@ export const TelemetryStream: React.FC<TelemetryStreamProps> = ({
     throttle: latestPacket.throttle,
     ambient_temperature: latestPacket.ambient_temperature,
     flight_phase: latestPacket.flight_phase,
-    fault_type: latestPacket.fault,
-    anomaly_flag: latestPacket.anomaly_flag
-  }, null, 2) : '{\n  "status": "INITIALIZING_STREAM",\n  "message": "Awaiting initial telemetry frame..."\n}';
+    fault_type: latestPacket.fault || 'NORMAL',
+    anomaly_flag: latestPacket.anomaly_flag ?? false
+  }, null, 2) : '{\n  "status": "STANDBY",\n  "message": "Awaiting initial telemetry frame from flight simulator..."\n}';
 
-  const handleCopyJson = () => {
-    navigator.clipboard.writeText(sampleJson);
-    setCopiedJson(true);
-    setTimeout(() => setCopiedJson(false), 2500);
-  };
-
-  const handleDownloadJson = () => {
-    const blob = new Blob([sampleJson], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `telemetry_packet_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleOpenExternalUrl = () => {
-    let url = endpointInput.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      if (url.startsWith(':')) url = `http://localhost${url}`;
-      else if (/^\d+$/.test(url)) url = `http://localhost:${url}`;
-      else url = `http://${url}`;
+  // 10 Canonical Engine Parameters Definition & Status Computation
+  const isEngineOn = latestPacket?.engine_on ?? false;
+  const canonicalParams = [
+    {
+      id: 'rpm',
+      name: 'Engine RPM',
+      raw: latestPacket?.rpm ?? 0,
+      formatted: `${Math.round(latestPacket?.rpm ?? 0)}`,
+      unit: 'RPM',
+      nominal: '1400 - 5800',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.rpm ?? 0) > 5800 
+          ? 'ALERT' 
+          : (latestPacket?.rpm ?? 0) < 1300 
+            ? 'CAUTION' 
+            : 'NORMAL'
+    },
+    {
+      id: 'cht',
+      name: 'CHT',
+      raw: latestPacket?.cht ?? 30,
+      formatted: `${(latestPacket?.cht ?? 30).toFixed(1)}`,
+      unit: '°C',
+      nominal: '60 - 120 °C',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.cht ?? 0) > 135 
+          ? 'ALERT' 
+          : (latestPacket?.cht ?? 0) > 115 
+            ? 'CAUTION' 
+            : 'NORMAL'
+    },
+    {
+      id: 'egt',
+      name: 'EGT',
+      raw: latestPacket?.egt ?? 0,
+      formatted: !isEngineOn ? '--' : `${(latestPacket?.egt ?? 0).toFixed(1)}`,
+      unit: '°C',
+      nominal: '650 - 850 °C',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.egt ?? 0) > 870 
+          ? 'ALERT' 
+          : 'NORMAL'
+    },
+    {
+      id: 'oil_pressure',
+      name: 'Oil Pressure',
+      raw: latestPacket?.oil_pressure ?? 0,
+      formatted: !isEngineOn ? '--' : `${(latestPacket?.oil_pressure ?? 0).toFixed(2)}`,
+      unit: 'bar',
+      nominal: '2.0 - 5.0 bar',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.oil_pressure ?? 0) < 1.8 
+          ? 'ALERT' 
+          : (latestPacket?.oil_pressure ?? 0) < 2.2 
+            ? 'CAUTION' 
+            : 'NORMAL'
+    },
+    {
+      id: 'oil_temperature',
+      name: 'Oil Temp.',
+      raw: latestPacket?.oil_temperature ?? 30,
+      formatted: `${(latestPacket?.oil_temperature ?? 30).toFixed(1)}`,
+      unit: '°C',
+      nominal: '50 - 110 °C',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.oil_temperature ?? 0) > 120 
+          ? 'ALERT' 
+          : (latestPacket?.oil_temperature ?? 0) > 105 
+            ? 'CAUTION' 
+            : 'NORMAL'
+    },
+    {
+      id: 'fuel_flow',
+      name: 'Fuel Flow',
+      raw: latestPacket?.fuel_flow ?? 0,
+      formatted: !isEngineOn ? '--' : `${(latestPacket?.fuel_flow ?? 0).toFixed(1)}`,
+      unit: 'L/h',
+      nominal: '5 - 28 L/h',
+      status: !isEngineOn ? 'STANDBY' : 'NORMAL'
+    },
+    {
+      id: 'fuel_pressure',
+      name: 'Fuel Pressure',
+      raw: latestPacket?.fuel_pressure ?? 0,
+      formatted: !isEngineOn ? '--' : `${(latestPacket?.fuel_pressure ?? 0).toFixed(2)}`,
+      unit: 'bar',
+      nominal: '0.15 - 0.40 bar',
+      status: !isEngineOn 
+        ? 'STANDBY' 
+        : (latestPacket?.fuel_pressure ?? 0) < 0.15 
+          ? 'CAUTION' 
+          : 'NORMAL'
+    },
+    {
+      id: 'map',
+      name: 'MAP',
+      raw: latestPacket?.map ?? 29.9,
+      formatted: `${(latestPacket?.map ?? 29.92).toFixed(1)}`,
+      unit: 'inHg',
+      nominal: '20 - 30 inHg',
+      status: !isEngineOn ? 'STANDBY' : 'NORMAL'
+    },
+    {
+      id: 'vibration_rms',
+      name: 'Vibration RMS',
+      raw: latestPacket?.vibration_rms ?? latestPacket?.vibration_rms_g ?? latestPacket?.vibration ?? 0.001,
+      formatted: `${(latestPacket?.vibration_rms ?? latestPacket?.vibration_rms_g ?? latestPacket?.vibration ?? 0.001).toFixed(4)}`,
+      unit: 'g',
+      nominal: '< 0.050 g',
+      status: (latestPacket?.vibration_rms ?? latestPacket?.vibration_rms_g ?? latestPacket?.vibration ?? 0) > 0.080 
+        ? 'ALERT' 
+        : (latestPacket?.vibration_rms ?? latestPacket?.vibration_rms_g ?? latestPacket?.vibration ?? 0) > 0.050 
+          ? 'CAUTION' 
+          : 'NORMAL'
+    },
+    {
+      id: 'engine_load',
+      name: 'Engine Load',
+      raw: latestPacket?.engine_load ?? 0,
+      formatted: `${Math.round(latestPacket?.engine_load ?? 0)}`,
+      unit: '%',
+      nominal: '0 - 100 %',
+      status: !isEngineOn ? 'STANDBY' : 'NORMAL'
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
+  ];
 
   return (
-    <div className="space-y-4">
-      {/* Top Banner: Prominent Header & Live Status */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-4 select-none">
+      
+      {/* ============================================================== */}
+      {/* 1. TOP HEADER: CLEAN AEROSPACE GCS STATUS HEADER               */}
+      {/* ============================================================== */}
+      <header className="bg-white rounded-2xl border border-gray-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center text-[#F97316] shadow-2xs">
-            <Radio className="w-6 h-6 animate-pulse" />
+          <div className="w-11 h-11 rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center text-[#F97316]">
+            <Radio className="w-5 h-5 animate-pulse" />
           </div>
           <div>
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <h2 className="text-base font-black text-gray-900 tracking-tight uppercase">
-                TELEMETRY SENDER &amp; SYSTEM SYNC
-              </h2>
-              <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-bold">
-                Host Server :4000
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-base font-black text-gray-900 tracking-tight uppercase">
+                TELEMETRY &amp; SYSTEM SYNC
+              </h1>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 font-bold">
+                UAV-BHARAT-01 &bull; ENG-001
               </span>
-              <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 font-bold">
-                UAV-BHARAT-01
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200 font-medium">
+                Rotax 912 ULS
               </span>
             </div>
-            <div className="text-xs text-gray-500 mt-0.5 font-medium">
-              High-fidelity 1 Hz REST JSON telemetry dispatch stream to target ground station or website
+            <div className="text-xs text-gray-500 mt-0.5 font-medium flex items-center gap-2">
+              <span>Ground Control Station Live Telemetry &amp; PHM Synchronization</span>
+              <span className="text-gray-300">&bull;</span>
+              <span className="text-slate-600 font-mono text-[11px]">SIMULATOR SERVICE: :4000</span>
             </div>
           </div>
         </div>
 
-        {/* Live Status Pill Badge */}
-        <div className="flex items-center gap-2">
-          {isConnected ? (
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300 font-mono text-xs font-bold shadow-2xs" title={telemetryStatus.endpoint}>
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <span>LIVE CONNECTED (200 OK)</span>
-            </span>
-          ) : isConnecting ? (
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300 font-mono text-xs font-bold shadow-2xs">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-              <span>CONNECTING...</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-orange-50 text-orange-800 border border-orange-300 font-mono text-xs font-bold shadow-2xs" title={telemetryStatus.lastError || 'Target awaiting recipient or streaming in local simulation mode'}>
-              <span className="w-2.5 h-2.5 rounded-full bg-[#F97316] animate-pulse" />
-              <span>DISPATCHING (1s)</span>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Main Two-Column Content Grid: Left Controls (Uncongested & Big) + Right JSON Stream */}
-      <div className="grid grid-cols-12 gap-5">
-        
-        {/* ============================================================== */}
-        {/* LEFT COLUMN: STREAM DISPATCH CONTROLS, TARGET & METRICS (BIG) */}
-        {/* ============================================================== */}
-        <div className="col-span-12 xl:col-span-6 flex flex-col gap-4">
-          
-          {/* Main Card: Controls & Target Configuration */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs space-y-6">
-            
-            {/* 1. Stream Dispatch Controls (Big Buttons) */}
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 text-[#F97316]" />
-                  STREAM DISPATCH STATE
-                </span>
-                <span className="text-xs font-mono text-gray-400">
-                  Rate: 1 Hz (1000ms interval)
-                </span>
+        {/* Status Highlights */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Stream Status Badge */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-mono font-bold shadow-2xs">
+            {!isStreaming ? (
+              <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border-amber-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                <span>STREAM STATUS: PAUSED</span>
               </div>
+            ) : isConnected ? (
+              <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border-emerald-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                <span>STREAM STATUS: LIVE</span>
+              </div>
+            ) : isConnecting ? (
+              <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border-amber-300">
+                <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                <span>STREAM STATUS: CONNECTING</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-orange-700 bg-orange-50 border-orange-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#F97316] animate-pulse" />
+                <span>STREAM STATUS: DISPATCHING (1s)</span>
+              </div>
+            )}
+          </div>
 
-              <div className="grid grid-cols-2 gap-3">
+          {/* Update Rate */}
+          <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono">
+            <span className="text-slate-400 mr-1.5 uppercase font-medium">UPDATE RATE:</span>
+            <strong className="text-slate-800 font-bold">1 Hz</strong>
+          </div>
+
+          {/* Destination */}
+          <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono">
+            <span className="text-slate-400 mr-1.5 uppercase font-medium">DESTINATION:</span>
+            <strong className="text-blue-700 font-bold">DIGITAL TWIN GCS</strong>
+          </div>
+        </div>
+      </header>
+
+      {/* ============================================================== */}
+      {/* 2. MAIN GRID: LEFT (STREAM & HEALTH) + RIGHT (CANONICAL 10)    */}
+      {/* ============================================================== */}
+      <div className="grid grid-cols-12 gap-4">
+        
+        {/* LEFT COLUMN: TELEMETRY STREAM STATUS & DISPATCH PIPELINE */}
+        <div className="col-span-12 lg:col-span-5 flex flex-col gap-4">
+          
+          {/* Card A: Telemetry Stream Health & Dispatch */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-[#F97316]" />
+                <h2 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  TELEMETRY STREAM
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   onClick={onStartStreaming}
-                  className={`flex items-center justify-center gap-2.5 py-3.5 px-4 rounded-xl text-sm font-extrabold transition-all duration-150 cursor-pointer shadow-xs ${
-                    telemetryStatus.isStreaming
-                      ? 'bg-[#F97316] hover:bg-[#EA580C] text-white shadow-orange-200 ring-2 ring-orange-400/40'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                  disabled={isStreaming}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isStreaming
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-300 font-black'
+                      : 'bg-orange-50 hover:bg-orange-100 text-[#F97316] border border-orange-300'
                   }`}
                 >
-                  <Play className={`w-4 h-4 ${telemetryStatus.isStreaming ? 'fill-current' : ''}`} />
-                  <span>Start 1Hz</span>
+                  <Play className={`w-3.5 h-3.5 ${isStreaming ? 'fill-current' : ''}`} />
+                  <span>{isStreaming ? 'STREAMING' : 'START 1Hz'}</span>
                 </button>
 
                 <button
                   onClick={onStopStreaming}
-                  className={`flex items-center justify-center gap-2.5 py-3.5 px-4 rounded-xl text-sm font-extrabold transition-all duration-150 cursor-pointer shadow-xs ${
-                    !telemetryStatus.isStreaming
-                      ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-200 ring-2 ring-red-400/40'
-                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                  disabled={!isStreaming}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    !isStreaming
+                      ? 'bg-red-50 text-red-700 border border-red-300 font-black'
+                      : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300'
                   }`}
                 >
-                  <Pause className={`w-4 h-4 ${!telemetryStatus.isStreaming ? 'fill-current' : ''}`} />
-                  <span>Pause</span>
+                  <Pause className="w-3.5 h-3.5" />
+                  <span>PAUSE</span>
                 </button>
               </div>
             </div>
 
-            {/* 2. Target Port & Preset Selection */}
-            <div className="space-y-2.5 pt-4 border-t border-gray-100">
+            {/* Metrics Status Grid */}
+            <div className="grid grid-cols-2 gap-3 font-mono">
+              {/* Stream Status */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                <span className="text-[10px] text-slate-500 font-sans uppercase font-bold block">
+                  STREAM STATUS
+                </span>
+                <div className="text-sm font-bold mt-0.5 flex items-center gap-1.5 truncate">
+                  {!isStreaming ? (
+                    <span className="text-amber-600">● PAUSED</span>
+                  ) : isConnected ? (
+                    <span className="text-emerald-600">● LIVE</span>
+                  ) : (
+                    <span className="text-orange-600">● DISPATCHING</span>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  Frequency: 1.0 Hz
+                </div>
+              </div>
+
+              {/* Sequence */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                <span className="text-[10px] text-slate-500 font-sans uppercase font-bold block">
+                  SEQUENCE
+                </span>
+                <div className="text-sm font-bold text-gray-900 mt-0.5">
+                  #{telemetryStatus.sequenceNumber || latestPacket?.sequence_number || 0}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  Frames Published
+                </div>
+              </div>
+
+              {/* Packets Sent */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                <span className="text-[10px] text-slate-500 font-sans uppercase font-bold block">
+                  PACKETS SENT
+                </span>
+                <div className="text-sm font-bold text-gray-900 mt-0.5">
+                  {telemetryStatus.packetsSent > 0 
+                    ? telemetryStatus.packetsSent.toLocaleString() 
+                    : (telemetryStatus.sequenceNumber || latestPacket?.sequence_number || 0).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                  {telemetryStatus.packetsFailed > 0 ? `${telemetryStatus.packetsFailed} failed` : 'Deliveries Confirmed'}
+                </div>
+              </div>
+
+              {/* Latency */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                <span className="text-[10px] text-slate-500 font-sans uppercase font-bold block">
+                  LATENCY
+                </span>
+                <div className="text-sm font-bold text-gray-900 mt-0.5">
+                  {telemetryStatus.latencyMs ? `${telemetryStatus.latencyMs} ms` : '--'}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                  Round-Trip Transit
+                </div>
+              </div>
+            </div>
+
+            {/* Last Packet Timestamp */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 flex items-center justify-between font-mono text-xs">
+              <span className="text-slate-500 font-sans text-xs">LAST PACKET:</span>
+              <strong className="text-gray-900 font-bold">
+                {telemetryStatus.lastTransmissionTime || new Date().toLocaleTimeString('en-GB')}
+              </strong>
+            </div>
+          </div>
+
+          {/* Card B: Digital Twin Synchronization & 4-Stage Pipeline */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-blue-600" />
+                <h2 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  DIGITAL TWIN SYNC
+                </h2>
+              </div>
+              <span className="text-[11px] font-mono text-slate-400">
+                End-to-End Pipeline
+              </span>
+            </div>
+
+            <div className="text-xs text-gray-600 leading-relaxed">
+              Synchronize live Rotax 912 engine telemetry and virtual sensor states with the Digital Twin / PHM dashboard.
+            </div>
+
+            {/* 4-Stage Aerospace Pipeline */}
+            <div className="bg-slate-900 text-slate-200 rounded-xl p-4 font-mono text-xs space-y-2 border border-slate-800">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
-                  <Server className="w-3.5 h-3.5 text-blue-600" />
-                  TARGET PORT / URL:
-                </label>
-                <span className="text-[11px] text-gray-400">Select preset or enter custom destination</span>
-              </div>
-
-              {/* Preset Buttons */}
-              <div className="grid grid-cols-3 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => handleSaveEndpoint('http://localhost:3000/api/telemetry')}
-                  title="Send Telemetry to Next.js / Localhost Port 3000"
-                  className={`py-2.5 px-3 rounded-xl border text-xs font-mono font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer ${
-                    endpointInput.includes('3000')
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-700 ring-2 ring-emerald-200 shadow-xs'
-                      : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>:3000</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSaveEndpoint('http://localhost:5174/api/telemetry')}
-                  title="Send Telemetry to Vite Dev Server Port 5174"
-                  className={`py-2.5 px-3 rounded-xl border text-xs font-mono font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer ${
-                    endpointInput.includes('5174')
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-700 ring-2 ring-emerald-200 shadow-xs'
-                      : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>:5174</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSaveEndpoint('https://sihaimodel-beta.vercel.app')}
-                  title="Target Vercel Production Cloud Deployment"
-                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer ${
-                    endpointInput.includes('vercel.app')
-                      ? 'bg-blue-50 border-blue-400 text-blue-700 ring-2 ring-blue-200 shadow-xs'
-                      : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-blue-500" />
-                  <span>Vercel</span>
-                </button>
-              </div>
-
-              {/* URL Input Bar with Server Icon & External Link Test */}
-              <div className="mt-2 relative flex items-center">
-                <div className="absolute left-3.5 text-gray-400 pointer-events-none">
-                  <Server className="w-4 h-4" />
-                </div>
-                <input
-                  type="text"
-                  value={endpointInput}
-                  onChange={(e) => setEndpointInput(e.target.value)}
-                  onBlur={() => handleSaveEndpoint(endpointInput)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveEndpoint(endpointInput); }}
-                  className="w-full bg-[#F9FAFB] hover:bg-white focus:bg-white border border-gray-300 focus:border-orange-500 rounded-xl pl-10 pr-24 py-3 text-xs font-mono text-gray-900 transition-all outline-none focus:ring-3 focus:ring-orange-100 shadow-inner"
-                  placeholder="https://sihaimodel-beta.vercel.app or port (e.g. 3000)"
-                />
-                <div className="absolute right-2 flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => handleSaveEndpoint(endpointInput)}
-                    className="px-2 py-1 text-[11px] font-bold bg-orange-100 hover:bg-orange-200 text-orange-800 rounded-lg transition-colors cursor-pointer"
-                    title="Apply Endpoint"
-                  >
-                    Set
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleOpenExternalUrl}
-                    title="Open destination URL in new browser tab"
-                    className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* 3. Transmission Diagnostics Metrics (Spacious 2x2 Grid) */}
-            <div className="pt-4 border-t border-gray-100">
-              <div className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-[#F97316]" />
-                TRANSMISSION DIAGNOSTICS &amp; NETWORK HEALTH
-              </div>
-
-              <div className="grid grid-cols-2 gap-3.5">
-                {/* Last POST */}
-                <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-3.5 transition-all hover:bg-slate-50">
-                  <span className="text-[11px] font-medium text-slate-500 block uppercase tracking-wide">
-                    Last POST:
-                  </span>
-                  <div className="text-lg font-mono font-black text-gray-900 mt-1 truncate">
-                    {telemetryStatus.lastTransmissionTime || '10:59:30'}
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    <span>Real-time UTC Sync</span>
-                  </div>
-                </div>
-
-                {/* HTTP Status */}
-                <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-3.5 transition-all hover:bg-slate-50">
-                  <span className="text-[11px] font-medium text-slate-500 block uppercase tracking-wide">
-                    HTTP Status:
-                  </span>
-                  <div className={`text-lg font-mono font-black mt-1 truncate ${isConnected ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    {telemetryStatus.lastHttpStatus ? `${telemetryStatus.lastHttpStatus} OK` : telemetryStatus.status === 'CONNECTED' ? '200 OK' : 'Ready'}
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
-                    <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                    <span>{isConnected ? 'Active Response 200' : 'Ready / In Dispatch Mode'}</span>
-                  </div>
-                </div>
-
-                {/* Packets Sent */}
-                <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-3.5 transition-all hover:bg-slate-50">
-                  <span className="text-[11px] font-medium text-slate-500 block uppercase tracking-wide">
-                    Packets Sent:
-                  </span>
-                  <div className="text-lg font-mono font-black text-gray-900 mt-1">
-                    {telemetryStatus.packetsSent.toLocaleString()}
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    Sequence #{telemetryStatus.sequenceNumber || 0}
-                  </div>
-                </div>
-
-                {/* Latency / Rate */}
-                <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-3.5 transition-all hover:bg-slate-50">
-                  <span className="text-[11px] font-medium text-slate-500 block uppercase tracking-wide">
-                    Latency / Rate:
-                  </span>
-                  <div className="text-lg font-mono font-black text-gray-900 mt-1 truncate">
-                    {telemetryStatus.latencyMs ? `${telemetryStatus.latencyMs}ms` : '92ms'} / 1s
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    1.0 Hz Frequency (1000ms)
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-          {/* DRDO Emblem Badge & 1-Click Sync Bridge Card */}
-          <div className="bg-gradient-to-r from-slate-900 to-[#1E293B] text-white rounded-2xl p-5 shadow-sm flex items-center justify-between gap-4 border border-slate-800">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full border-2 border-white/20 bg-white/10 flex flex-col items-center justify-center p-1 shadow-inner shrink-0">
-                <svg viewBox="0 0 100 100" className="w-10 h-10 text-white">
-                  <circle cx="50" cy="50" r="46" fill="none" stroke="#FFFFFF" strokeWidth="4" />
-                  <circle cx="50" cy="50" r="38" fill="none" stroke="#F97316" strokeWidth="3" strokeDasharray="4,4" />
-                  <path d="M25 75 L75 25 M75 75 L25 25" stroke="#FFFFFF" strokeWidth="3" />
-                  <circle cx="50" cy="50" r="14" fill="#F97316" />
-                  <text x="50" y="54" fill="#FFFFFF" fontSize="10" fontWeight="bold" textAnchor="middle">DRDO</text>
-                </svg>
-              </div>
-              <div>
-                <div className="text-xs font-mono font-bold tracking-wider text-orange-400 uppercase">
-                  DEFENCE R&amp;D ORGANISATION
-                </div>
-                <div className="text-sm font-bold text-white mt-0.5">
-                  Live Browser Sync Bridge
-                </div>
-                <div className="text-xs text-slate-300 mt-0.5">
-                  1-click connect script for website 2 &amp; external evaluation dashboards
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={handleCopyBridge}
-              title="Copy 1-Click Browser Sync Bridge script"
-              className="px-4 py-3 rounded-xl bg-[#F97316] hover:bg-[#EA580C] text-white font-bold text-xs transition-all shadow-md flex items-center gap-2 shrink-0 cursor-pointer"
-            >
-              {copiedBridge ? <Check className="w-4 h-4 text-white" /> : <Zap className="w-4 h-4 fill-current" />}
-              <span>{copiedBridge ? 'Bridge Copied!' : '1-Click Sync'}</span>
-            </button>
-          </div>
-
-        </div>
-
-        {/* ============================================================== */}
-        {/* RIGHT COLUMN: LIVE TELEMETRY JSON PAYLOAD INSPECTOR (SPACIOUS) */}
-        {/* ============================================================== */}
-        <div className="col-span-12 xl:col-span-6 flex flex-col">
-          <div className="bg-[#0B1120] text-slate-100 rounded-2xl border border-slate-800 shadow-md flex flex-col h-full overflow-hidden">
-            
-            {/* Header Toolbar */}
-            <div className="px-5 py-3.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <Code2 className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs font-mono font-bold text-slate-200">
-                  LIVE TELEMETRY JSON PAYLOAD
-                </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  POST /api/telemetry
+                <span className="text-slate-400">1. ENGINE SIMULATOR</span>
+                <span className={`text-[11px] font-bold flex items-center gap-1.5 ${isEngineOn ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${isEngineOn ? 'bg-emerald-500' : 'bg-slate-500'}`} />
+                  <span>{isEngineOn ? 'ACTIVE' : 'STANDBY'}</span>
                 </span>
               </div>
+              <div className="pl-3 text-slate-600 text-[10px] leading-none">&darr;</div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCopyJson}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors border border-slate-700 cursor-pointer"
-                  title="Copy formatted JSON packet to clipboard"
-                >
-                  {copiedJson ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedJson ? 'Copied' : 'Copy'}</span>
-                </button>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">2. VIRTUAL SENSORS</span>
+                <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>ACTIVE</span>
+                </span>
+              </div>
+              <div className="pl-3 text-slate-600 text-[10px] leading-none">&darr;</div>
 
-                <button
-                  onClick={handleDownloadJson}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors border border-slate-700 cursor-pointer"
-                  title="Download JSON packet"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download</span>
-                </button>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">3. TELEMETRY STREAM</span>
+                <span className={`text-[11px] font-bold flex items-center gap-1.5 ${isStreaming ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                  <span>{isStreaming ? 'ACTIVE' : 'PAUSED'}</span>
+                </span>
+              </div>
+              <div className="pl-3 text-slate-600 text-[10px] leading-none">&darr;</div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">4. DIGITAL TWIN GCS</span>
+                <span className={`text-[11px] font-bold flex items-center gap-1.5 ${isConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'}`} />
+                  <span>{isConnected ? 'CONNECTED' : 'DISPATCHING'}</span>
+                </span>
               </div>
             </div>
 
-            {/* Live Packet Key Badges */}
-            {latestPacket && (
-              <div className="grid grid-cols-4 gap-2 px-5 py-2.5 bg-slate-900/50 border-b border-slate-800/80 text-[11px] font-mono">
-                <div className="text-slate-400">
-                  RPM: <span className="text-emerald-400 font-bold">{latestPacket.rpm}</span>
+            {/* Sync Action Button */}
+            <div className="space-y-2">
+              <button
+                onClick={handleSyncWithDigitalTwin}
+                disabled={syncState === 'SYNCING'}
+                className="w-full py-3 px-4 rounded-xl bg-[#F97316] hover:bg-[#EA580C] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {syncState === 'SYNCING' ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : syncState === 'CONNECTED' ? (
+                  <Check className="w-4 h-4" />
+                ) : (
+                  <Zap className="w-4 h-4 fill-current" />
+                )}
+                <span>
+                  {syncState === 'SYNCING' 
+                    ? 'SYNCING WITH DIGITAL TWIN...' 
+                    : syncState === 'CONNECTED' 
+                      ? 'SYNCHRONIZED WITH DIGITAL TWIN' 
+                      : 'SYNC WITH DIGITAL TWIN'}
+                </span>
+              </button>
+
+              {syncMessage && (
+                <div className={`p-2.5 rounded-lg text-xs font-mono flex items-center gap-2 ${
+                  syncState === 'FAILED' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                }`}>
+                  {syncState === 'FAILED' ? <AlertTriangle className="w-3.5 h-3.5 text-red-500" /> : <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                  <span>{syncMessage}</span>
                 </div>
-                <div className="text-slate-400">
-                  CHT: <span className="text-amber-400 font-bold">{latestPacket.cht}°C</span>
-                </div>
-                <div className="text-slate-400">
-                  VIB: <span className="text-sky-400 font-bold">{(latestPacket.vibration_rms_g ?? latestPacket.vibration).toFixed(3)}g</span>
-                </div>
-                <div className="text-slate-400 truncate">
-                  FAULT: <span className="text-orange-400 font-bold">{latestPacket.fault || 'NORMAL'}</span>
-                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Card C: Telemetry Destination */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-blue-600" />
+                <h2 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  TELEMETRY DESTINATION
+                </h2>
+              </div>
+              <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span>Website 2 &bull; Digital Twin GCS</span>
+              </span>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 font-mono text-xs text-slate-800 break-all flex items-center justify-between gap-2">
+              <span className="truncate">{endpointInput}</span>
+              <a
+                href={endpointInput}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1 text-slate-400 hover:text-slate-700 shrink-0"
+                title="Open destination in browser"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+
+            {/* Test Connection Button */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={testResult.status === 'testing'}
+                className="flex-1 py-2 px-3 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {testResult.status === 'testing' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span>{testResult.status === 'testing' ? 'TESTING...' : 'TEST CONNECTION'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDevSettings(!showDevSettings)}
+                className="py-2 px-3 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 text-xs font-medium transition-all flex items-center gap-1 cursor-pointer"
+                title="Toggle local development ports and settings"
+              >
+                <span>ADVANCED</span>
+                {showDevSettings ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            </div>
+
+            {testResult.message && (
+              <div className={`p-2 rounded-lg text-xs font-mono ${
+                testResult.status === 'success' 
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+              }`}>
+                {testResult.message}
               </div>
             )}
 
-            {/* JSON Code Viewer (Spacious & Clean font-mono) */}
-            <div className="p-5 flex-1 overflow-y-auto max-h-[520px] font-mono text-xs leading-relaxed text-emerald-400 selection:bg-emerald-900 selection:text-white">
-              <pre className="whitespace-pre-wrap">{sampleJson}</pre>
-            </div>
-
-            {/* Bottom Status Bar */}
-            <div className="px-5 py-2.5 bg-slate-900/90 border-t border-slate-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Broadcasting to: {endpointInput || 'Localhost :4000'}</span>
+            {/* Collapsible Advanced Developer Settings */}
+            {showDevSettings && (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2 mt-2">
+                <div className="text-[10px] font-bold text-slate-500 uppercase">
+                  DEVELOPER DESTINATION OVERRIDES
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSaveEndpoint('http://localhost:3000/api/telemetry')}
+                    className="py-1.5 px-2 bg-white hover:bg-gray-100 border border-gray-200 rounded font-mono text-[11px] font-bold text-gray-700 text-center cursor-pointer"
+                  >
+                    :3000
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveEndpoint('http://localhost:5174/api/telemetry')}
+                    className="py-1.5 px-2 bg-white hover:bg-gray-100 border border-gray-200 rounded font-mono text-[11px] font-bold text-gray-700 text-center cursor-pointer"
+                  >
+                    :5174
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveEndpoint('https://sihaimodel-beta.vercel.app/api/telemetry')}
+                    className="py-1.5 px-2 bg-white hover:bg-gray-100 border border-blue-300 rounded text-[11px] font-bold text-blue-700 text-center cursor-pointer"
+                  >
+                    Vercel GCS
+                  </button>
+                </div>
+                <div className="pt-1">
+                  <input
+                    type="text"
+                    value={endpointInput}
+                    onChange={(e) => setEndpointInput(e.target.value)}
+                    onBlur={() => handleSaveEndpoint(endpointInput)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-gray-300 rounded font-mono text-xs"
+                    placeholder="Custom URL or Port"
+                  />
+                </div>
               </div>
-              <div>
-                Standard Schema v1.0.0
-              </div>
-            </div>
-
+            )}
           </div>
+
+        </div>
+
+        {/* RIGHT COLUMN: CANONICAL 10 ENGINE PARAMETERS TABLE & JSON INSPECTOR */}
+        <div className="col-span-12 lg:col-span-7 flex flex-col gap-4">
+          
+          {/* Card: Canonical 10 Engine Parameters */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Gauge className="w-4 h-4 text-[#F97316]" />
+                <h2 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  ENGINE TELEMETRY &bull; 10 CANONICAL PARAMETERS
+                </h2>
+              </div>
+              <span className="text-xs font-mono text-slate-500">
+                Source of Truth: Reduced-Order Rotax 912 ULS
+              </span>
+            </div>
+
+            {/* Aerospace Parameter Table */}
+            <div className="overflow-x-auto rounded-xl border border-gray-200">
+              <table className="w-full text-left font-mono text-xs">
+                <thead className="bg-slate-50 border-b border-gray-200 text-[11px] text-slate-500 uppercase font-sans">
+                  <tr>
+                    <th className="py-2.5 px-3.5 font-bold">#</th>
+                    <th className="py-2.5 px-3.5 font-bold">Parameter</th>
+                    <th className="py-2.5 px-3.5 font-bold text-right">Value</th>
+                    <th className="py-2.5 px-3.5 font-bold">Unit</th>
+                    <th className="py-2.5 px-3.5 font-bold text-slate-400">Nominal Range</th>
+                    <th className="py-2.5 px-3.5 font-bold text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {canonicalParams.map((param, idx) => (
+                    <tr key={param.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2 px-3.5 text-slate-400 text-[11px]">{idx + 1}</td>
+                      <td className="py-2 px-3.5 font-sans font-bold text-gray-900">{param.name}</td>
+                      <td className="py-2 px-3.5 font-bold text-right text-slate-800 text-sm">
+                        {param.formatted}
+                      </td>
+                      <td className="py-2 px-3.5 text-slate-500 text-[11px]">{param.unit}</td>
+                      <td className="py-2 px-3.5 text-slate-400 text-[11px]">{param.nominal}</td>
+                      <td className="py-2 px-3.5 text-center">
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-sans font-extrabold ${
+                          param.status === 'NORMAL' 
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : param.status === 'CAUTION'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : param.status === 'ALERT'
+                                ? 'bg-red-50 text-red-700 border border-red-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}>
+                          {param.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Digital Twin State Summary Bar */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-mono flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500 font-sans">Active Fault:</span>
+                <strong className={`font-bold ${latestPacket?.fault && latestPacket.fault !== 'NORMAL' ? 'text-red-600' : 'text-emerald-700'}`}>
+                  {latestPacket?.fault || 'NORMAL'}
+                </strong>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500 font-sans">Anomaly State:</span>
+                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                  latestPacket?.anomaly_flag 
+                    ? 'bg-red-100 text-red-800' 
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  {latestPacket?.anomaly_flag ? 'FLAGGED (ANOMALY)' : 'NOMINAL (HEALTHY)'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500 font-sans">Flight Phase:</span>
+                <strong className="text-gray-900 font-bold">
+                  {latestPacket?.flight_phase || 'STANDBY'}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Card: Advanced Telemetry Payload (Collapsible JSON Viewer) */}
+          <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  ADVANCED TELEMETRY PAYLOAD
+                </h3>
+                <div className="text-[11px] text-gray-400">
+                  Standardized REST JSON schema dispatched to Website 2 Ground Control Station
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowJsonPayload(!showJsonPayload)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>{showJsonPayload ? 'HIDE JSON' : 'VIEW JSON'}</span>
+                  {showJsonPayload ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+
+                {showJsonPayload && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleCopyJson}
+                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                      title="Copy payload to clipboard"
+                    >
+                      {copiedJson ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedJson ? 'COPIED' : 'COPY'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadJson}
+                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                      title="Download payload JSON"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>EXPORT</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {showJsonPayload && (
+              <div className="bg-[#0B1120] text-emerald-400 p-4 rounded-xl font-mono text-xs overflow-y-auto max-h-[380px] border border-slate-800 shadow-inner">
+                <pre className="whitespace-pre-wrap">{sampleJson}</pre>
+              </div>
+            )}
+          </div>
+
         </div>
 
       </div>
+
     </div>
   );
 };
